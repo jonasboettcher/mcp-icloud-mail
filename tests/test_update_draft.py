@@ -151,7 +151,7 @@ def test_wrong_target_never_written(update_box, change, match):
 
 def test_move_required_before_writing(update_box):
     box, client, args = update_box
-    client.capabilities = b'IMAP4rev1 UIDPLUS'
+    client.capabilities = b'IMAP4rev1'
     with pytest.raises(MailError, match='require IMAP MOVE'):
         box.update_draft(**args)
     assert set(client.messages) == {8, 20}
@@ -219,3 +219,115 @@ def test_html_and_inline_image_preserved_when_adding_files(update_box):
     assert saved.get_body(preferencelist=('html',)).get_content() == original.get_body(preferencelist=('html',)).get_content()
     assert next(p for p in saved.walk() if p.get('Content-ID') == '<picture>').get_payload(decode=True) == b'picture data'
     assert len(parse_message(client.messages[21])['attachments']) == 2
+
+
+class UIDPlusIMAP(UpdateIMAP):
+    def __init__(self):
+        super().__init__()
+        self.capabilities = b'IMAP4rev1 UIDPLUS'
+        self.drafts = self.messages
+        self.draft_flags = self.flags
+        self.trash_flags = {}
+        self.selected = 'Drafts'
+        self.failure = None
+
+    def select(self, folder, readonly=True):
+        self.selected = folder.strip('"')
+        if self.selected == 'Drafts':
+            self.messages, self.flags = self.drafts, self.draft_flags
+            assert not readonly
+        else:
+            assert self.selected == 'Deleted Messages' and readonly
+            self.messages, self.flags = self.trash, self.trash_flags
+        return 'OK', [str(len(self.messages)).encode()]
+
+    def response(self, key):
+        return key, [b'42' if self.selected == 'Drafts' else b'43']
+
+    def uid(self, operation, *args):
+        if operation not in ('COPY', 'STORE', 'EXPUNGE'):
+            return super().uid(operation, *args)
+        self.calls.append((operation, *args))
+        assert self.selected == 'Drafts' and args[0] == '8'
+        if self.failure == operation + '_NO':
+            return 'NO', [b'Failure']
+        if operation == 'COPY':
+            assert args[1] == '"Deleted Messages"'
+            target = max(self.trash, default=100) + 1
+            self.trash[target] = self.drafts[8]
+            self.trash_flags[target] = self.draft_flags[8].copy()
+            if self.failure == 'CORRUPT_COPY':
+                self.trash[target] = self.trash[target].replace(b'Original body', b'Corrupted copy')
+        elif operation == 'STORE':
+            assert args[1:] == ('+FLAGS.SILENT', '(\\Deleted)')
+            self.draft_flags[8].add(b'\\Deleted')
+        else:
+            assert len(args) == 1 and b'\\Deleted' in self.draft_flags[8]
+            self.drafts.pop(8)
+            self.draft_flags.pop(8)
+        if self.failure == operation + '_LOST_REPLY':
+            raise imaplib.IMAP4.abort('Connection lost after command')
+        return 'OK', [b'Done']
+
+
+@pytest.fixture
+def uidplus_box(update_box):
+    box, _, args = update_box
+    client = UIDPlusIMAP()
+    @contextlib.contextmanager
+    def connection():
+        yield client
+    box.connection = connection
+    return box, client, args
+
+
+def test_uidplus_archives_verified_copy_and_only_removes_target(uidplus_box):
+    box, client, args = uidplus_box
+    result = box.update_draft(**args)
+    assert result['updated'] and result['previous_draft_moved_to'] == 'Deleted Messages'
+    assert set(client.drafts) == {20, 21}
+    assert list(client.trash.values()) == [client.original]
+    assert client.draft_flags[20] == {b'\\Deleted'}
+    assert ('EXPUNGE', '8') in client.calls
+    assert box.update_draft(**args)['reused']
+    assert sum(c[0] == 'COPY' for c in client.calls) == 1
+    assert sum(c[0] == 'append' for c in client.calls) == 1
+
+
+@pytest.mark.parametrize('failure', ['COPY_NO', 'COPY_LOST_REPLY', 'STORE_NO',
+                                     'STORE_LOST_REPLY', 'EXPUNGE_NO', 'EXPUNGE_LOST_REPLY'])
+def test_uidplus_partial_failures_resume_without_duplicate_replacements(uidplus_box, failure):
+    box, client, args = uidplus_box
+    client.failure = failure
+    first = box.update_draft(**args)
+    assert first['saved'] and first['cleanup_pending'] and not first['updated']
+    assert 21 in client.drafts and 20 in client.drafts
+    client.failure = None
+    second = box.update_draft(**args)
+    assert second['updated'] and second['reused']
+    assert set(client.drafts) == {20, 21}
+    assert list(client.trash.values()) == [client.original]
+    assert sum(c[0] == 'append' for c in client.calls) == 1
+
+
+def test_uidplus_bad_trash_copy_never_marks_or_removes_original(uidplus_box):
+    box, client, args = uidplus_box
+    client.failure = 'CORRUPT_COPY'
+    result = box.update_draft(**args)
+    assert result['cleanup_pending'] and 8 in client.drafts
+    assert b'\\Deleted' not in client.draft_flags[8]
+    assert not any(c[0] in ('STORE', 'EXPUNGE') for c in client.calls)
+
+
+def test_uidplus_rechecks_new_draft_after_copy(uidplus_box):
+    box, client, args = uidplus_box
+    original_uid = client.uid
+    def uid(operation, *values):
+        result = original_uid(operation, *values)
+        if operation == 'COPY':
+            client.drafts[21] = client.drafts[21].replace(b'Original body', b'Changed replacement')
+        return result
+    client.uid = uid
+    result = box.update_draft(**args)
+    assert result['cleanup_pending'] and 8 in client.drafts
+    assert not any(c[0] in ('STORE', 'EXPUNGE') for c in client.calls)

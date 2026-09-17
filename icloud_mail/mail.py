@@ -238,7 +238,9 @@ class Mailbox:
         with self.connection() as client:
             status, rows = client.capability()
             capabilities = b' '.join(rows or []).decode('ascii').upper().split() if status == 'OK' else []
-            return {'folders': self._folders(client), 'draft_updates_supported': 'MOVE' in capabilities}
+            method = 'MOVE' if 'MOVE' in capabilities else 'UIDPLUS' if 'UIDPLUS' in capabilities else None
+            return {'folders': self._folders(client), 'draft_updates_supported': method is not None,
+                    'draft_update_method': method}
 
     def _drafts_folder(self, client):
         if self.config.drafts_folder:
@@ -260,6 +262,56 @@ class Mailbox:
             if identity and int(identity[1]) == uid and flags:
                 return set(flags[1].decode('ascii').lower().split())
         return None
+
+    def _archive_draft_uidplus(self, client, folder, validity, uid, trash, message_id,
+                              source_hash, replacement_uid, replacement_hash):
+        """Emulate a move with a verified Trash copy and UID-scoped expunge only."""
+        def verified_copy():
+            self._select(client, trash, readonly=True)
+            candidates = self._search(client, ['HEADER', 'Message-ID', quoted(message_id)])
+            if len(candidates) > 20:
+                raise MailError('Too many matching Trash entries to verify safely.')
+            for candidate in candidates:
+                flags = self._flags(client, candidate)
+                if flags is not None and '\\deleted' not in flags:
+                    if hashlib.sha256(self._fetch(client, candidate)).hexdigest() == source_hash:
+                        return True
+            return False
+
+        def original_flags():
+            flags = self._flags(client, uid)
+            if flags is not None:
+                if '\\draft' not in flags or hashlib.sha256(self._fetch(client, uid)).hexdigest() != source_hash:
+                    raise MailError('Original draft changed during cleanup.')
+            return flags
+
+        copied = verified_copy()
+        self._select(client, folder, validity, readonly=False)
+        flags = original_flags()
+        if flags is None:
+            return False
+        if not copied:
+            if '\\deleted' in flags:
+                raise MailError('Original is marked deleted without a verified Trash copy.')
+            status, _ = client.uid('COPY', str(uid), quoted(utf7_encode(trash)))
+            if status != 'OK' or not verified_copy():
+                raise MailError('Trash copy was not confirmed and verified.')
+        self._select(client, folder, validity, readonly=False)
+        new_flags = self._flags(client, replacement_uid)
+        if not new_flags or '\\draft' not in new_flags or '\\deleted' in new_flags:
+            raise MailError('Replacement changed during cleanup.')
+        if draft_snapshot(self._fetch(client, replacement_uid)) != replacement_hash:
+            raise MailError('Replacement content changed during cleanup.')
+        flags = original_flags()
+        if flags is None:
+            return False
+        status, _ = client.uid('STORE', str(uid), '+FLAGS.SILENT', '(\\Deleted)')
+        if status != 'OK':
+            raise MailError('Cannot mark the archived draft for removal.')
+        status, _ = client.uid('EXPUNGE', str(uid))
+        if status != 'OK' or self._flags(client, uid) is not None:
+            raise MailError('Removal of the archived draft was not confirmed.')
+        return True
 
     def _select(self, client, folder, expected=None, readonly=True):
         status, _ = client.select(quoted(utf7_encode(folder)), readonly=readonly)
@@ -427,8 +479,9 @@ class Mailbox:
                 raise MailError('Only the configured Drafts folder can be updated.')
             self._select(client, folder, uidvalidity, readonly=False)
             status, capabilities = client.capability()
-            if status != 'OK' or b'MOVE' not in b' '.join(capabilities or []).upper().split():
-                raise MailError('Safe draft updates require IMAP MOVE; no draft was changed.')
+            capabilities = set(b' '.join(capabilities or []).upper().split())
+            if status != 'OK' or not capabilities.intersection({b'MOVE', b'UIDPLUS'}):
+                raise MailError('Safe draft updates require IMAP MOVE or UIDPLUS; no draft was changed.')
             trash = [f['name'] for f in self._folders(client) if '\\Trash' in f['flags']]
             if len(trash) != 1 or trash[0] == folder:
                 raise MailError('Trash folder is ambiguous; no draft was changed.')
@@ -501,18 +554,25 @@ class Mailbox:
                       'link_note': 'Opens iCloud Mail; a stable direct draft URL is not provided by IMAP.'}
             old_flags = self._flags(client, uid)
             if old_flags is not None:
-                if '\\draft' not in old_flags or '\\deleted' in old_flags:
+                if '\\draft' not in old_flags or ('\\deleted' in old_flags and b'MOVE' in capabilities):
                     raise MailError('Original draft flags changed. Replacement saved; original was not moved.')
                 if hashlib.sha256(self._fetch(client, uid)).hexdigest() != saved.get('X-ICloud-MCP-Update-Source', '').strip():
                     raise MailError('Original draft content changed. Replacement saved; original was not moved.')
-                # MOVE targets exactly one UID and never expunges unrelated deleted messages.
+                # Both paths target one UID and preserve a recoverable copy in Trash.
                 try:
-                    status, _ = client.uid('MOVE', str(uid), quoted(utf7_encode(trash[0])))
-                    if status != 'OK' or self._flags(client, uid) is not None:
-                        raise MailError('The old draft is still present.')
+                    if b'MOVE' in capabilities:
+                        status, _ = client.uid('MOVE', str(uid), quoted(utf7_encode(trash[0])))
+                        if status != 'OK' or self._flags(client, uid) is not None:
+                            raise MailError('The old draft is still present.')
+                        archived = True
+                    else:
+                        archived = self._archive_draft_uidplus(client, folder, uidvalidity, uid, trash[0],
+                            expected_message_id, saved.get('X-ICloud-MCP-Update-Source', '').strip(),
+                            replacement_uid, saved.get('X-ICloud-MCP-Update-Result', '').strip())
                 except (MailError, imaplib.IMAP4.error, OSError):
                     result.update(cleanup_pending=True, warning='Replacement saved and verified, but moving the old draft was not confirmed. Retry with the same request_id and arguments.')
                     return result
-                result['previous_draft_moved_to'] = trash[0]
+                if archived:
+                    result['previous_draft_moved_to'] = trash[0]
             result.update(updated=True, previous_draft_removed=True)
             return result

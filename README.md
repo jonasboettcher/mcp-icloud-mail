@@ -85,8 +85,15 @@ IMAP message content is immutable, so the update uses this sequence:
 4. Recheck the original and move only its UID to the special-use Trash folder.
 
 The operation requires [IMAP MOVE](https://datatracker.ietf.org/doc/html/rfc6851)
-and an unambiguous Trash folder. `list_folders` reports `draft_updates_supported`
-for the MOVE capability. Missing capability or folder identification stops the
+or [UIDPLUS](https://datatracker.ietf.org/doc/html/rfc4315) and an unambiguous Trash
+folder. iCloud may advertise UIDPLUS without MOVE. In that case, the connector
+copies the original to Trash, reads it back and compares all bytes, then uses
+`UID STORE` and `UID EXPUNGE` for that one original UID. It never issues a global
+EXPUNGE. A retry finds the verified Trash copy before continuing, including after
+a lost COPY response or an interrupted UID EXPUNGE.
+
+`list_folders` reports `draft_updates_supported` and `draft_update_method` for
+these capabilities. Missing capability or folder identification stops the
 operation before writing. Unrelated drafts and messages are never moved or
 expunged. The old version is recoverable from Trash subject to the account's
 normal Trash retention; the connector does not permanently delete it.
