@@ -1,7 +1,29 @@
 # iCloud Mail MCP
 
-A private connector for **one iCloud Mail account**. Includes an MCP server for
-ChatGPT over Streamable HTTP and local stdio access for Codex.
+A reusable iCloud Mail MCP connector, intended to let each user connect their own
+mailbox through an Apple authorization flow initiated from ChatGPT.
+
+**Current implementation: single-account prototype.** The code supports Streamable
+HTTP and local stdio, but still requires an app-specific password configured by
+the operator. It does not yet implement per-user Apple authorization or a shared
+multi-user service. A public repository does not make this prototype suitable for
+shared hosting.
+
+## Public connector status
+
+The intended connection flow is: connect in ChatGPT, sign in at Apple, authorize
+access to your own mailbox, then return to ChatGPT. Users should not need to add
+mailbox passwords or personal account settings to the server's deployment.
+
+Apple documents account authorization for supported third-party mail apps, but a
+developer onboarding path and mail authorization contract usable by this project
+have not yet been verified. Ordinary Sign in with Apple is not evidence of mailbox
+access. The existing MCP OAuth implementation only authorizes access to this
+connector; it does not authorize the connector with Apple.
+
+See [authentication design and implementation prerequisites](docs/authentication.md)
+for the evidence, remaining dependency, and requirements for a public service.
+The setup instructions below describe the existing single-account prototype.
 
 ## Features
 
@@ -28,7 +50,7 @@ revocation, restart persistence, and MCP initialization.
 been tested.** These require your credentials and a target host. The server is
 designed for a single owner and one process. It is not a public multi-account service.
 
-## Render deployment with Infrastructure as Code
+## Single-account prototype on Render
 
 [`render.yaml`](render.yaml) defines an always-on service in Frankfurt: Python 3.12,
 one instance, 1 GiB of persistent storage for OAuth state, HTTPS through Render,
