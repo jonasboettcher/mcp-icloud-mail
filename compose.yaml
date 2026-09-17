@@ -1,0 +1,14 @@
+services:
+  connector:
+    build: .
+    user: "${ICLOUD_UID:?Run setup --docker}:${ICLOUD_GID:?Run setup --docker}"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./state:/state
+      - ./secrets/config.json:/run/secrets/icloud_config:ro

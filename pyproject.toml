@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "icloud-mail-mcp"
+version = "0.1.0"
+description = "Single-account iCloud Mail MCP connector with OAuth and draft creation"
+requires-python = ">=3.12"
+dependencies = ["mcp==1.30.0"]
+
+[project.optional-dependencies]
+test = ["pytest==9.1.1"]
+
+[project.scripts]
+icloud-mail-mcp = "icloud_mail.server:main"
+icloud-mail-setup = "icloud_mail.setup:main"
+
+[tool.setuptools.packages.find]
+include = ["icloud_mail*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "icloud-mail": {
+      "command": "icloud-mail-mcp",
+      "args": ["--stdio"]
+    }
+  }
+}
