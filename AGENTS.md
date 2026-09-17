@@ -25,3 +25,9 @@
   mailbox routing, or deployment defaults. Preserve the prototype while the Apple
   integration prerequisites remain unresolved; do not silently substitute a
   password collection form for Apple authorization.
+
+## Commit messages
+
+- All commit messages must follow [Conventional Commits](https://www.conventionalcommits.org/).
+- Use a type, an optional scope, and a concise description, for example: `docs(agents): require conventional commits`.
+- Mark breaking changes with `!` before the colon or a `BREAKING CHANGE:` footer, as specified by the standard.
