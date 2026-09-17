@@ -101,20 +101,20 @@ class OAuthProvider:
             flow = request.query_params.get('flow', '')
             record = self.store.get('flow', flow)
             if not record:
-                return PlainTextResponse('Verbindung abgelaufen. Bitte neu verbinden.', 400, headers=security)
+                return PlainTextResponse('Connection expired. Please reconnect.', 400, headers=security)
             csrf = secrets.token_urlsafe(32)
             self.store.put('csrf', csrf, {'flow': flow}, time.time()+600)
             client = await self.get_client(record['client_id'])
-            name = html.escape((client.client_name or 'MCP-Client') if client else 'MCP-Client')
+            name = html.escape((client.client_name or 'MCP client') if client else 'MCP client')
             callback = html.escape(record['params']['redirect_uri'])
             permissions = ', '.join(record['params']['scopes'] or [])
-            page = f'''<!doctype html><html lang="de"><meta charset="utf-8"><title>iCloud Mail verbinden</title>
-<h1>iCloud Mail verbinden</h1><p>Client: {name}</p><p>Rückleitung: {callback}</p>
-<p>Berechtigungen: {html.escape(permissions)}</p>
-<p>Gib Deinen bei der Einrichtung erzeugten Connector-Schlüssel ein.</p>
+            page = f'''<!doctype html><html lang="en"><meta charset="utf-8"><title>Connect iCloud Mail</title>
+<h1>Connect iCloud Mail</h1><p>Client: {name}</p><p>Redirect URL: {callback}</p>
+<p>Permissions: {html.escape(permissions)}</p>
+<p>Enter the connector key generated during setup.</p>
 <form method="post" action="/login"><input type="hidden" name="flow" value="{html.escape(flow)}">
-<input type="hidden" name="csrf" value="{csrf}"><label>Connector-Schlüssel <input type="password" name="key" required autocomplete="off"></label>
-<button type="submit">Zugriff erlauben</button></form></html>'''
+<input type="hidden" name="csrf" value="{csrf}"><label>Connector key <input type="password" name="key" required autocomplete="off"></label>
+<button type="submit">Allow access</button></form></html>'''
             response = HTMLResponse(page, headers=security)
             response.set_cookie(cookie_name, csrf, httponly=True, secure=self.config.public_url.startswith('https:'), samesite='strict', max_age=600)
             return response
@@ -123,15 +123,15 @@ class OAuthProvider:
         cookie = request.cookies.get(cookie_name, '')
         origin = request.headers.get('origin')
         if not csrf or not hmac.compare_digest(csrf, cookie) or (origin and origin != self.config.public_url):
-            return PlainTextResponse('Ungültige Anmeldung.', 403, headers=security)
+            return PlainTextResponse('Invalid login.', 403, headers=security)
         binding = self.store.get('csrf', csrf, consume=True)
         if not binding or binding['flow'] != flow:
-            return PlainTextResponse('Anmeldung abgelaufen.', 403, headers=security)
+            return PlainTextResponse('Login expired.', 403, headers=security)
         if not hmac.compare_digest(digest(str(form.get('key', ''))), self.config.login_key_hash):
-            return PlainTextResponse('Schlüssel ungültig. Verbindung neu starten.', 403, headers=security)
+            return PlainTextResponse('Invalid key. Restart the connection.', 403, headers=security)
         record = self.store.get('flow', flow, consume=True)
         if not record:
-            return PlainTextResponse('Verbindung abgelaufen.', 400, headers=security)
+            return PlainTextResponse('Connection expired.', 400, headers=security)
         p = AuthorizationParams.model_validate(record['params'])
         code = secrets.token_urlsafe(32)
         auth = AuthorizationCode(code=code, client_id=record['client_id'], scopes=p.scopes or [],

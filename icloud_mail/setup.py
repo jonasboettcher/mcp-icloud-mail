@@ -20,16 +20,16 @@ def main():
     if args.check:
         config = Config.model_validate_json(path.read_text())
         folders = Mailbox(config).folders()['folders']
-        print(f'IMAP-Verbindung erfolgreich. {len(folders)} Ordner gefunden.')
+        print(f'IMAP connection successful. Found {len(folders)} folders.')
         for folder in folders:
             if '\\Drafts' in folder['flags']:
-                print('Entwurfsordner:', folder['name'])
+                print('Drafts folder:', folder['name'])
         return
     if path.exists():
-        raise SystemExit(f'Konfiguration besteht bereits: {path}. Sie wurde nicht überschrieben.')
-    address = input('Deine vollständige iCloud-Mail-Adresse: ').strip()
-    password = getpass.getpass('App-spezifisches Apple-Passwort (verdeckt): ').strip()
-    url = input('Öffentliche HTTPS-Adresse ohne /mcp (leer = lokaler Test): ').strip() or 'http://localhost:8000'
+        raise SystemExit(f'Configuration already exists: {path}. It has not been overwritten.')
+    address = input('Your full iCloud email address: ').strip()
+    password = getpass.getpass('Apple app-specific password (hidden): ').strip()
+    url = input('Public HTTPS origin without /mcp (leave blank for local testing): ').strip() or 'http://localhost:8000'
     key = secrets.token_urlsafe(32)
     state = Path('/state') if args.docker else path.parent / 'state'
     config = Config(email=address, app_password=password, public_url=url, login_key_hash=digest(key), state_dir=state)
@@ -39,10 +39,10 @@ def main():
     if len(drafts) == 1:
         config.drafts_folder = drafts[0]
     else:
-        print('Verfügbare Ordner:', ', '.join(f['name'] for f in folders))
-        chosen = input('Exakter Name des Entwurfsordners: ')
+        print('Available folders:', ', '.join(f['name'] for f in folders))
+        chosen = input('Exact name of the Drafts folder: ')
         if chosen not in [f['name'] for f in folders]:
-            raise SystemExit('Unbekannter Ordner; nichts gespeichert.')
+            raise SystemExit('Unknown folder; nothing saved.')
         config.drafts_folder = chosen
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     data = config.model_dump(mode='json')
@@ -55,10 +55,10 @@ def main():
         env = Path('.env')
         if not env.exists():
             env.write_text(f'ICLOUD_UID={os.getuid()}\nICLOUD_GID={os.getgid()}\nICLOUD_DOMAIN={url.split("://",1)[1]}\n')
-    print('iCloud-Verbindung geprüft. Konfiguration gespeichert:', path)
-    print('Connector-Schlüssel (jetzt im Passwortmanager speichern):', key)
-    print('MCP-Adresse:', config.public_url + '/mcp')
-    print('Der Connector-Schlüssel ist für die Anmeldeseite, das Apple-Passwort bleibt auf dem Server.')
+    print('iCloud connection verified. Configuration saved:', path)
+    print('Connector key (save it in your password manager now):', key)
+    print('MCP URL:', config.public_url + '/mcp')
+    print('Use the connector key on the login page; the Apple password stays on the server.')
 
 
 if __name__ == '__main__':

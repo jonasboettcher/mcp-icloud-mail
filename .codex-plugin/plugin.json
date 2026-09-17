@@ -1,18 +1,25 @@
 {
   "name": "icloud-mail",
   "version": "0.1.0",
-  "description": "iCloud Mail lesen, durchsuchen und Antwortentwürfe im Postfach speichern.",
+  "description": "Read and search iCloud Mail, and save reply drafts in your mailbox.",
   "author": {
     "name": "Jonas Böttcher"
   },
   "interface": {
     "displayName": "iCloud Mail",
-    "shortDescription": "iCloud-Mails lesen und Entwürfe speichern.",
-    "longDescription": "Privater MCP-Connector für ein iCloud-Postfach: Ordner, Suche, Nachrichten, Anhänge und Entwürfe mit Thread-Bezug.",
+    "shortDescription": "Read iCloud Mail and save drafts.",
+    "longDescription": "Private MCP connector for one iCloud mailbox: folders, search, messages, attachments, and threaded reply drafts.",
     "developerName": "Jonas Böttcher",
     "category": "Productivity",
-    "capabilities": ["Read", "Write"],
-    "defaultPrompt": ["Zeige ungelesene iCloud-Mails.", "Suche in iCloud Mail nach einem Absender.", "Erstelle einen Antwortentwurf in iCloud Mail."]
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Show unread iCloud messages.",
+      "Search iCloud Mail for a sender.",
+      "Create a reply draft in iCloud Mail."
+    ]
   },
   "mcpServers": "./.mcp.json"
 }

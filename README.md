@@ -1,83 +1,82 @@
 # iCloud Mail MCP
 
-Privater Connector für **ein iCloud-Mail-Postfach**. Enthält einen MCP-Server für
-ChatGPT über Streamable HTTP und einen lokalen stdio-Zugang für Codex.
+A private connector for **one iCloud Mail account**. Includes an MCP server for
+ChatGPT over Streamable HTTP and local stdio access for Codex.
 
-## Funktionen
+## Features
 
-| Werkzeug | Funktion |
+| Tool | Function |
 | --- | --- |
-| `list_folders` | Ordner und besondere Ordner wie Entwürfe auflisten |
-| `search_messages` | Pro Ordner nach Text, Absender, Empfänger, Betreff, Datum und ungelesenen Mails suchen |
-| `read_message` | Nachricht als Text mit Empfänger- und Thread-Informationen lesen |
-| `read_attachment` | Anhänge in begrenzten Base64-Blöcken auslesen |
-| `create_draft` | Neuen Textentwurf direkt in iCloud speichern, bei Antworten mit Thread-Bezug |
+| `list_folders` | List folders and special-use folders such as Drafts |
+| `search_messages` | Search each folder by text, sender, recipient, subject, date, and unread status |
+| `read_message` | Read a message as text, including recipient and threading information |
+| `read_attachment` | Read attachments in bounded Base64 chunks |
+| `create_draft` | Save a new text draft directly in iCloud, preserving threading for replies |
 
-Lesen verändert den Ungelesen-Status nicht. Bestehende Nachrichten und Entwürfe
-bleiben erhalten. Versand, Löschen und automatisches Weiterleiten sind nicht implementiert.
-Dateianhänge in neuen Entwürfen und Bearbeitung vorhandener Entwürfe sind in dieser Version nicht enthalten.
+Reading does not change unread status. Existing messages and drafts are preserved.
+Sending, deleting, and automatic forwarding are not implemented. Attachments in new
+drafts and editing existing drafts are not included in this version.
 
-## Stand der Prüfung
+## Validation status
 
-Implementiert und lokal mit simuliertem IMAP sowie echten MCP-/OAuth-Handlern geprüft.
-Die Tests decken MIME, Umlaute, HTML, Anhänge, UIDVALIDITY, Lesestatus, Suchfilter,
-Entwurfswiederholungen, Thread-Bezüge, OAuth/PKCE, Zugriffsschutz, Token-Rotation,
-Widerruf, Neustartbeständigkeit und MCP-Initialisierung ab.
+Implemented and tested locally with simulated IMAP and real MCP/OAuth handlers.
+Tests cover MIME, Unicode characters, HTML, attachments, UIDVALIDITY, read status,
+search filters, draft retries, threading, OAuth/PKCE, access controls, token rotation,
+revocation, restart persistence, and MCP initialization.
 
-**Ein echter iCloud-Login, der Docker-Build und die Kontoverknüpfung in ChatGPT sind
-noch nicht getestet.** Dafür brauchst Du Deine Zugangsdaten und einen Zielrechner.
-Der Server ist für einen einzelnen Besitzer mit einem Prozess ausgelegt. Er ist kein
-öffentlicher Dienst für mehrere Konten.
+**A real iCloud login, the Docker build, and account linking in ChatGPT have not yet
+been tested.** These require your credentials and a target host. The server is
+designed for a single owner and one process. It is not a public multi-account service.
 
-## Render per Infrastructure as Code
+## Render deployment with Infrastructure as Code
 
-Die Datei [`render.yaml`](render.yaml) beschreibt den dauerhaften Dienst in Frankfurt:
-Python 3.12, eine Instanz, 1 GiB persistenter Speicher für OAuth-Zustand, HTTPS über
-Render und ein Healthcheck. Render nutzt seine Python-Laufzeit; der vorhandene
-Docker-Weg bleibt für andere Zielrechner verfügbar. Für diesen Betrieb sind ein
-Render-Konto und ein Compute-Tarif mit dauerhaftem Betrieb und Disk erforderlich.
+[`render.yaml`](render.yaml) defines an always-on service in Frankfurt: Python 3.12,
+one instance, 1 GiB of persistent storage for OAuth state, HTTPS through Render,
+and a health check. Render uses its native Python runtime; the Docker deployment
+option remains available for other hosts. This deployment requires a Render account
+and a compute plan that supports continuous operation and a persistent disk.
 
-[Bei Render einrichten](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2Fjonasboettcher%2Fmcp-icloud-mail)
+[Deploy to Render](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2Fjonasboettcher%2Fmcp-icloud-mail)
 
-1. Öffne den Link und verbinde Dein GitHub-Konto, falls Render danach fragt.
-2. Prüfe die aus `render.yaml` gelesene Konfiguration.
-3. Trage `ICLOUD_EMAIL` und `ICLOUD_APP_PASSWORD` in Render ein. Verwende für das
-   Passwort ein app-spezifisches Apple-Passwort. Diese Werte stehen nicht im Git-Repository.
-4. Starte das Deployment. Render erzeugt `ICLOUD_LOGIN_KEY` automatisch. Speichere
-   diesen Wert aus der Environment-Ansicht in Deinem Passwortmanager: Er wird später
-   auf der Connector-Anmeldeseite benötigt.
-5. Verwende die von Render angezeigte HTTPS-Serviceadresse mit `/mcp` für ChatGPT.
-   Die Anwendung übernimmt ihre OAuth-Adresse automatisch aus `RENDER_EXTERNAL_URL`.
-6. Prüfe nach dem Verbinden zuerst `list_folders`. Damit wird auch der echte
-   iCloud-Zugang geprüft. Der Healthcheck bestätigt ausschließlich die Erreichbarkeit
-   der Anwendung, keine erfolgreiche Anmeldung bei Apple.
+1. Open the link and connect your GitHub account if Render asks you to.
+2. Review the configuration loaded from `render.yaml`.
+3. Enter `ICLOUD_EMAIL` and `ICLOUD_APP_PASSWORD` in Render. Use an Apple app-specific
+   password. These values are not stored in the Git repository.
+4. Start the deployment. Render generates `ICLOUD_LOGIN_KEY` automatically. Save
+   this value from the Environment view in your password manager: you will need it
+   on the connector's login page.
+5. Use the HTTPS service URL shown by Render with `/mcp` appended for ChatGPT.
+   The application automatically derives its OAuth URL from `RENDER_EXTERNAL_URL`.
+6. After connecting, test `list_folders` first. This also verifies access to your
+   actual iCloud account. The health check only confirms that the application is
+   reachable, not that authentication with Apple succeeds.
 
-Bei jeder Änderung auf `main` startet Render einen neuen Build. Das Build-Skript
-führt die Tests aus; bei fehlgeschlagenen Tests wird die Version nicht bereitgestellt.
-Der OAuth-Zustand bleibt unter `/var/data/icloud-mail` erhalten. Wegen des einzelnen
-Datenträgers kann beim Deployment eine kurze Unterbrechung entstehen.
+Each change on `main` triggers a new Render build. The build script runs the tests;
+a version with failing tests is not deployed. OAuth state persists under
+`/var/data/icloud-mail`. The single persistent disk can cause a brief interruption
+during deployment.
 
-Diese Automatik ist für Deinen eigenen Dienst vorgesehen. Wenn Du den Blueprint
-für eine unabhängige Installation übernimmst, verwende Deinen eigenen Fork oder
-setze `autoDeployTrigger: off`, damit Änderungen im Ursprungsrepository nicht
-ungefragt Deinen Dienst aktualisieren.
+This automation is intended for your own service. If you reuse the blueprint for
+an independent installation, use your own fork or set `autoDeployTrigger: off` so
+that upstream changes do not update your service without your approval.
 
-Eine eigene Domain ist optional. Falls Du eine einrichtest, setze
-`ICLOUD_PUBLIC_URL` auf die kanonische HTTPS-Domain ohne Pfad und verbinde ChatGPT
-anschließend neu. Verwende nur diese eine eigene Domain, da der Server den
-Host-Header darauf beschränkt. Bei abweichender Ordnererkennung kannst Du
-`ICLOUD_DRAFTS_FOLDER` in Render ergänzen.
+A custom domain is optional. If you configure one, set `ICLOUD_PUBLIC_URL` to the
+canonical HTTPS origin without a path, then reconnect ChatGPT. Use only that one
+custom domain, because the server restricts the Host header to it. If automatic
+folder detection differs from your mailbox configuration, set `ICLOUD_DRAFTS_FOLDER`
+in Render.
 
-Im Umgebungsmodus liegen Zugangsdaten in den Render-Umgebungsvariablen und im
-Prozessspeicher; es wird keine zusätzliche Konfigurationsdatei mit Passwort erzeugt.
-Die Dateikonfiguration für lokale und Docker-Installationen bleibt unverändert.
+In environment configuration mode, credentials remain in Render environment
+variables and process memory; no additional configuration file containing the
+password is created. File-based configuration for local and Docker installations
+is unchanged.
 
-Der Blueprint und der Startmodus wurden lokal geprüft. Ein Deployment im
-Render-Konto und ein Test mit echten iCloud-Zugangsdaten stehen noch aus.
+The blueprint and startup mode have been validated locally. Deployment in a Render
+account and testing with real iCloud credentials are still pending.
 
-## Einrichtung auf Deinem Rechner
+## Local setup
 
-Voraussetzung: Python 3.12 oder neuer.
+Requirement: Python 3.12 or later.
 
 ```bash
 git clone https://github.com/jonasboettcher/mcp-icloud-mail.git
@@ -88,164 +87,163 @@ python3 -m venv .venv
 .venv/bin/icloud-mail-setup
 ```
 
-Unter Windows verwendest Du `py -3.12 -m venv .venv` und die Programme unter
-`.venv\Scripts\` statt `.venv/bin/`.
+On Windows, use `py -3.12 -m venv .venv` and the executables under `.venv\Scripts\`
+instead of `.venv/bin/`.
 
-Die Einrichtung fragt Deine vollständige iCloud-Mail-Adresse und ein
-[app-spezifisches Apple-Passwort](https://support.apple.com/de-de/102654) verdeckt ab.
-Sie prüft die Verbindung zu iCloud, erkennt den Entwurfsordner und speichert erst
-danach die Konfiguration. Gib diese Daten in Deinem privaten Terminal ein.
+Setup asks for your full iCloud email address and an
+[Apple app-specific password](https://support.apple.com/en-us/102654), with password
+input hidden. It checks the connection to iCloud, detects the Drafts folder, and
+only then saves the configuration. Enter these credentials in your private terminal.
 
-Für HTTP gibst Du die öffentliche HTTPS-Adresse ohne Pfad ein. Für lokalen stdio-
-Betrieb kannst Du das Feld leer lassen. Speichere den erzeugten **Connector-Schlüssel**
-in Deinem Passwortmanager; er wird nur im privaten Terminal angezeigt.
+For HTTP, enter the public HTTPS origin without a path. For local stdio use, you
+can leave this field blank. Save the generated **connector key** in your password
+manager; it is only displayed in your private terminal.
 
-Standard-Konfiguration: `~/.config/icloud-mail/config.json`. Mit
-`ICLOUD_MAIL_CONFIG` kannst Du einen anderen Dateipfad festlegen. Unter Unix muss
-die Konfigurationsdatei ausschließlich für Deinen Benutzer lesbar sein (`0600`).
-Das Apple-Passwort liegt in dieser geschützten Datei; verwende verschlüsselten
-Datenträgerspeicher und verschlüsselte Backups auf Deinem Server.
+The default configuration path is `~/.config/icloud-mail/config.json`. Set
+`ICLOUD_MAIL_CONFIG` to use a different file path. On Unix, the configuration file
+must be accessible only to your user (`0600`). The Apple password is stored in this
+protected file; use encrypted disk storage and encrypted backups on your server.
 
-Vorhandene Konfigurationen werden nicht überschrieben. Verbindung erneut prüfen:
+Existing configurations are never overwritten. To check the connection again:
 
 ```bash
 .venv/bin/icloud-mail-setup --check
 ```
 
-## Docker und HTTPS
+## Docker and HTTPS
 
-Für einen Linux-Server mit Docker Compose und eigener Domain:
+For a Linux server with Docker Compose and a custom domain:
 
-1. Entpacke das Projekt auf dem Server.
-2. Installiere das Python-Paket wie oben, starte die Einrichtung diesmal mit
-   `.venv/bin/icloud-mail-setup --docker` und gib die echte HTTPS-Domain ein.
-3. Die Einrichtung erzeugt `secrets/config.json`, `.env` und `state/`.
-4. Richte den DNS-Eintrag auf den Server und stelle sicher, dass Ports 80 und 443
-   für Caddy erreichbar und frei sind.
-5. Starte:
+1. Extract the project on the server.
+2. Install the Python package as described above, then run setup with
+   `.venv/bin/icloud-mail-setup --docker` and enter the actual HTTPS origin.
+3. Setup creates `secrets/config.json`, `.env`, and `state/`.
+4. Point the DNS record to the server and ensure that ports 80 and 443 are available
+   and reachable for Caddy.
+5. Start the service:
 
 ```bash
 docker compose -f compose.yaml -f compose.https.yaml up -d --build
 ```
 
-Caddy übernimmt Zertifikat und HTTPS. Der Connector-Port 8000 wird ausschließlich
-an localhost veröffentlicht. Wenn bereits ein Reverse Proxy vorhanden ist, genügt
-`docker compose up -d --build`; leite die konfigurierte Domain auf Port 8000 weiter
-und erhalte den ursprünglichen Host-Header. Begrenze HTTP-Requests am Proxy auf 1 MiB.
+Caddy handles certificates and HTTPS. Connector port 8000 is published only on
+localhost. If you already have a reverse proxy, run `docker compose up -d --build`;
+forward the configured domain to port 8000 and preserve the original Host header.
+Limit HTTP request sizes to 1 MiB at the proxy.
 
-Konfiguration und OAuth-Datenbank werden als Volumes eingebunden. Der Prozess läuft
-mit der beim Setup ermittelten UID/GID, ohne zusätzliche Linux-Capabilities und mit
-schreibgeschütztem Container-Dateisystem. `state/` ist für OAuth-Daten beschreibbar.
+The configuration and OAuth database are mounted as volumes. The process runs
+with the UID/GID determined during setup, without additional Linux capabilities,
+and with a read-only container filesystem. `state/` remains writable for OAuth data.
 
-Starte **genau eine Instanz mit einem Worker**: Die Sperre zur Vermeidung gleichzeitiger
-identischer Entwürfe und die HTTP-Ratenbegrenzung gelten pro Prozess.
+Run **exactly one instance with one worker**: the lock preventing concurrent
+identical drafts and the HTTP rate limits operate per process.
 
-## Mit ChatGPT verbinden
+## Connect to ChatGPT
 
-Der MCP-Endpunkt liegt unter Deiner konfigurierten Domain mit dem Pfad `/mcp`.
+The MCP endpoint is available at your configured domain with the path `/mcp`.
 
-Nach der [OpenAI-Anleitung](https://developers.openai.com/plugins/deploy/connect-chatgpt):
+Following the [OpenAI guide](https://developers.openai.com/plugins/deploy/connect-chatgpt):
 
-1. Aktiviere den Entwicklermodus unter Einstellungen → Sicherheit und Anmeldung,
-   soweit für Dein Konto verfügbar.
-2. Öffne Plugins, wähle das Plus und lege die Verbindung zum HTTPS-MCP-Endpunkt an.
-3. Verwende OAuth und dynamische Client-Registrierung. Ein Client-Secret musst Du
-   nicht manuell in die Verbindung eintragen.
-4. Prüfe auf der Anmeldeseite Client, Rückleitungsadresse und Berechtigungen.
-   Gib dort Deinen Connector-Schlüssel ein.
-5. Prüfe die fünf erkannten Werkzeuge und aktiviere die Verbindung in einem neuen Chat.
+1. Enable developer mode under Settings → Security and login, if available for your
+   account.
+2. Open Plugins, select the plus button, and create a connection to the HTTPS MCP
+   endpoint.
+3. Use OAuth and dynamic client registration. You do not need to enter a client
+   secret manually in the connection settings.
+4. Review the client, redirect URL, and permissions on the login page. Enter your
+   connector key there.
+5. Check the five discovered tools and enable the connection in a new chat.
 
-Das Apple-Passwort wird bei diesem Vorgang nicht an ChatGPT übergeben.
-Die Einrichtung der Verbindung hängt von den verfügbaren Kontofunktionen ab.
+Your Apple password is not passed to ChatGPT during this process. Connection setup
+depends on the features available to your account.
 
-Für einen privaten Test ist laut OpenAI auch Secure MCP Tunnel möglich. Die
-Tunnel-Einrichtung ist nicht Bestandteil dieses Pakets.
+According to OpenAI, Secure MCP Tunnel is also available for private testing.
+Tunnel setup is not included in this package.
 
-## Lokaler Codex-Zugang
+## Local Codex access
 
-Nach Installation und Einrichtung kannst Du den Server starten:
+After installation and setup, start the server:
 
 ```bash
 .venv/bin/icloud-mail-mcp --stdio
 ```
 
-Die enthaltene `.mcp.json` nutzt den Befehl `icloud-mail-mcp --stdio`. Dieser muss
-im PATH des lokalen Codex-Prozesses liegen; alternativ trägst Du dort den absoluten
-Pfad aus Deiner virtuellen Umgebung ein. Im stdio-Modus gelten die Rechte des
-lokalen Betriebssystembenutzers; OAuth ist für den HTTP-Zugang vorgesehen.
+The included `.mcp.json` uses the command `icloud-mail-mcp --stdio`. This command
+must be on the local Codex process's PATH; alternatively, specify the absolute path
+to the executable in your virtual environment. In stdio mode, the local operating
+system user's permissions apply; OAuth is used for HTTP access.
 
-## Verhalten und Grenzen
+## Behavior and limitations
 
-- Die Suche arbeitet pro Ordner. Verwende `list_folders`, wenn gesendete Nachrichten,
-  Archiv oder weitere Ordner dazugehören. Datumsfilter verwenden IMAP-interne
-  Zustelldaten, `since` inklusive und `before` exklusive.
-- Suchseiten sind nach UID absteigend sortiert, also nach Ablagereihenfolge. Mit
-  `next_before_uid` kannst Du ältere Treffer abrufen. Neu eingegangene Nachrichten
-  verschieben diese Fortsetzung nicht.
-- Nachrichten werden über Ordner, UIDVALIDITY und UID identifiziert. Wird ein Ordner
-  neu angelegt, werden alte Kennungen abgewiesen.
-- Text und HTML werden als Text ausgegeben; externe Bilder und Links werden nicht
-  abgerufen. Mailinhalte sind Daten und dürfen keine Agentenanweisungen ersetzen.
-- Nachrichten werden standardmäßig bis 25 MiB gelesen. Anhänge werden aus derselben
-  MIME-Nachricht extrahiert. Jeder Anhangaufruf lädt die Nachricht erneut; große
-  Anhänge verursachen entsprechend mehr Übertragungsvolumen.
-- Für eine Antwort musst Du die Originalkennung und die geprüften To/CC/BCC-Werte
-  ausdrücklich angeben. Empfänger werden nicht aus einem möglicherweise manipulierten
-  Nachrichtentext automatisch übernommen. `In-Reply-To` und `References` werden aus
-  der Originalnachricht erzeugt.
-- `request_id` dient als Wiederholungskennung. Verwende für einen neuen Entwurf eine
-  neue Kennung, für einen Wiederholungsversuch unverändert dieselbe. Solange der
-  gespeicherte Entwurf vorhanden ist, erkennt der Server Wiederholungen über seine
-  deterministische Message-ID. Wird er extern gelöscht, kann ein erneuter Aufruf ihn
-  neu erstellen. Bei Netzwerkfehlern wird ein Schreibvorgang nicht automatisch wiederholt.
-- IMAP liefert keinen belegten stabilen iCloud-Weblink zu einem einzelnen Entwurf.
-  Das Ergebnis enthält den Link zu iCloud Mail, Ordner, Message-ID und nach Möglichkeit
-  UID. Der Link darf nicht als direkter Entwurfslink bezeichnet werden.
-- Ein Entwurf wird als neuer Eintrag gespeichert. Für eine andere Fassung wird eine
-  neue `request_id` verwendet; die alte Fassung bleibt bestehen.
+- Search operates per folder. Use `list_folders` to include sent messages, archives,
+  or other folders. Date filters use IMAP internal delivery dates, with `since`
+  inclusive and `before` exclusive.
+- Search pages are sorted by descending UID, reflecting mailbox insertion order.
+  Use `next_before_uid` to retrieve older results. Newly arrived messages do not
+  shift this continuation point.
+- Messages are identified by folder, UIDVALIDITY, and UID. If a folder is recreated,
+  old identifiers are rejected.
+- Plain text and HTML are returned as text; external images and links are not
+  fetched. Email content is data and must not replace agent instructions.
+- Messages up to 25 MiB are read by default. Attachments are extracted from the
+  same MIME message. Each attachment call downloads the message again, so large
+  attachments increase transfer volume.
+- Replies require the original message identifier and explicitly verified To/CC/BCC
+  values. Recipients are not automatically taken from potentially manipulated
+  message text. `In-Reply-To` and `References` are derived from the original message.
+- `request_id` is a retry identifier. Use a new identifier for a new draft and keep
+  the same identifier unchanged for a retry. While the saved draft exists, the
+  server detects retries through its deterministic Message-ID. If the draft is
+  deleted externally, another call can recreate it. Writes are not automatically
+  retried after network errors.
+- IMAP does not provide a verified, stable iCloud web link to an individual draft.
+  The result includes a link to iCloud Mail, the folder, Message-ID, and UID when
+  available. The link must not be described as a direct draft link.
+- Each draft is saved as a new entry. Use a new `request_id` for a different version;
+  the previous version is preserved.
 
-## Zugriffsschutz und Betrieb
+## Access controls and operation
 
-HTTP-Zugriff ist durch OAuth Authorization Code + S256-PKCE geschützt. Der Server
-stellt Discovery, Registrierung, Login, Token-Erneuerung und Widerruf bereit.
-Zugriffsrechte sind `mail:read` und `mail:drafts`; der Schreibaufruf prüft sein Recht
-zusätzlich zur allgemeinen Authentifizierung.
+HTTP access is protected by OAuth Authorization Code with S256-PKCE. The server
+provides discovery, registration, login, token refresh, and revocation. The scopes
+are `mail:read` and `mail:drafts`; the write operation checks its scope in addition
+to general authentication.
 
-Zugriffstokens gelten eine Stunde, rotierende Refresh-Tokens 30 Tage. Ein alter
-Refresh-Token ist nach Benutzung ungültig; schon ausgegebene Zugriffstokens bleiben
-bis zum Ablauf oder Widerruf gültig. Ein Widerruf entfernt alle Tokens des jeweiligen
-Clients. Codes und Tokens werden unter Hashwerten in SQLite gespeichert. Client-Metadaten
-einschließlich eventueller OAuth-Client-Secrets bleiben in der geschützten Datenbank.
+Access tokens expire after one hour; rotating refresh tokens expire after 30 days.
+An old refresh token becomes invalid after use; previously issued access tokens
+remain valid until expiry or revocation. Revocation removes all tokens for the
+relevant client. Codes and tokens are stored under hashes in SQLite. Client
+metadata, including any OAuth client secrets, remains in the protected database.
 
-Die Anmeldung nutzt CSRF-Schutz und sichere Cookies. Die HTTP-Endpunkte begrenzen
-Anfragegrößen, prüfen Host/Origin und begrenzen Anmelde-/Registrierungsanfragen.
-Zugriffslogs mit OAuth-Abfrageparametern sind im Server deaktiviert; aktiviere solche
-Logs auch im Reverse Proxy nicht.
+Login uses CSRF protection and secure cookies. HTTP endpoints limit request sizes,
+validate Host/Origin, and rate-limit login and registration requests. Access logs
+containing OAuth query parameters are disabled in the server; do not enable such
+logs in the reverse proxy either.
 
-Um alle Verbindungen zu widerrufen: Server stoppen, `state/oauth.sqlite3` entfernen
-und neu starten. Um den Connector-Schlüssel zu wechseln: Konfiguration geschützt
-sichern, eine neue Einrichtung durchführen und die OAuth-Datenbank zurücksetzen.
-Das app-spezifische Apple-Passwort kannst Du unabhängig davon im Apple-Account widerrufen.
+To revoke all connections, stop the server, remove `state/oauth.sqlite3`, and
+restart. To rotate the connector key, back up the configuration securely, run a
+fresh setup, and reset the OAuth database. You can independently revoke the Apple
+app-specific password in your Apple Account.
 
-Diese Version nutzt das offizielle MCP-Python-SDK 1.30.0. Dessen Widerruf-Handler
-verlangt auch bei öffentlichen OAuth-Clients ein `client_secret`-Formularfeld. Der
-Connector ersetzt diesen Handler und nutzt weiterhin die Client-Authentifizierung
-des SDKs; die Regression ist getestet. Die OAuth-Metadaten zeigen die tatsächlich
-unterstützten Verfahren `none` und `client_secret_post` an.
+This version uses the official MCP Python SDK 1.30.0. Its revocation handler requires
+a `client_secret` form field even for public OAuth clients. The connector replaces
+that handler while retaining the SDK's client authentication; the regression is
+tested. OAuth metadata lists the authentication methods actually supported:
+`none` and `client_secret_post`.
 
-## Entwicklung
+## Development
 
 ```bash
 .venv/bin/python -m pytest -q
 ```
 
-`requirements.lock` fixiert die tatsächlich getesteten Abhängigkeiten einschließlich
-Testwerkzeugen. Zugangsdaten, OAuth-Zustand und `.env` gehören weder ins Repository
-noch in ein weitergegebenes Paket.
+`requirements.lock` pins the dependencies used in testing, including test tools.
+Credentials, OAuth state, and `.env` must not be included in the repository or any
+shared package.
 
-Referenzen:
+References:
 
-- [Apple: iCloud-Mailserver-Einstellungen](https://support.apple.com/de-de/102525)
-- [Offizielles MCP-Python-SDK](https://github.com/modelcontextprotocol/python-sdk)
-- [OpenAI: OAuth für MCP-Server](https://developers.openai.com/plugins/build/auth)
-- [OpenAI: MCP-Server verbinden und testen](https://developers.openai.com/plugins/deploy/connect-chatgpt)
+- [Apple: iCloud Mail server settings](https://support.apple.com/en-us/102525)
+- [Official MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
+- [OpenAI: OAuth for MCP servers](https://developers.openai.com/plugins/build/auth)
+- [OpenAI: Connect and test MCP servers](https://developers.openai.com/plugins/deploy/connect-chatgpt)
