@@ -143,6 +143,10 @@ def build_server(config, http=True):
 
     if provider:
         mcp.custom_route('/login', methods=['GET','POST'])(provider.login)
+        @mcp.custom_route('/healthz', methods=['GET'])
+        async def health(request):
+            # Process readiness only. No iCloud requests or account details.
+            return JSONResponse({'status': 'ok'}, headers={'Cache-Control': 'no-store'})
     return mcp
 
 

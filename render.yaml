@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+services:
+  - type: web
+    name: mcp-icloud-mail
+    runtime: python
+    region: frankfurt
+    plan: 0.5c-512mb
+    branch: main
+    numInstances: 1
+    autoDeployTrigger: commit
+    buildCommand: bash scripts/render-build.sh
+    startCommand: icloud-mail-mcp --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    disk:
+      name: icloud-oauth-state
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: ICLOUD_CONFIG_SOURCE
+        value: environment
+      - key: ICLOUD_STATE_DIR
+        value: /var/data/icloud-mail
+      - key: ICLOUD_EMAIL
+        sync: false
+      - key: ICLOUD_APP_PASSWORD
+        sync: false
+      - key: ICLOUD_LOGIN_KEY
+        generateValue: true

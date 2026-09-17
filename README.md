@@ -29,6 +29,52 @@ noch nicht getestet.** Dafür brauchst Du Deine Zugangsdaten und einen Zielrechn
 Der Server ist für einen einzelnen Besitzer mit einem Prozess ausgelegt. Er ist kein
 öffentlicher Dienst für mehrere Konten.
 
+## Render per Infrastructure as Code
+
+Die Datei [`render.yaml`](render.yaml) beschreibt den dauerhaften Dienst in Frankfurt:
+Python 3.12, eine Instanz, 1 GiB persistenter Speicher für OAuth-Zustand, HTTPS über
+Render und ein Healthcheck. Render nutzt seine Python-Laufzeit; der vorhandene
+Docker-Weg bleibt für andere Zielrechner verfügbar. Für diesen Betrieb sind ein
+Render-Konto und ein Compute-Tarif mit dauerhaftem Betrieb und Disk erforderlich.
+
+[Bei Render einrichten](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2Fjonasboettcher%2Fmcp-icloud-mail)
+
+1. Öffne den Link und verbinde Dein GitHub-Konto, falls Render danach fragt.
+2. Prüfe die aus `render.yaml` gelesene Konfiguration.
+3. Trage `ICLOUD_EMAIL` und `ICLOUD_APP_PASSWORD` in Render ein. Verwende für das
+   Passwort ein app-spezifisches Apple-Passwort. Diese Werte stehen nicht im Git-Repository.
+4. Starte das Deployment. Render erzeugt `ICLOUD_LOGIN_KEY` automatisch. Speichere
+   diesen Wert aus der Environment-Ansicht in Deinem Passwortmanager: Er wird später
+   auf der Connector-Anmeldeseite benötigt.
+5. Verwende die von Render angezeigte HTTPS-Serviceadresse mit `/mcp` für ChatGPT.
+   Die Anwendung übernimmt ihre OAuth-Adresse automatisch aus `RENDER_EXTERNAL_URL`.
+6. Prüfe nach dem Verbinden zuerst `list_folders`. Damit wird auch der echte
+   iCloud-Zugang geprüft. Der Healthcheck bestätigt ausschließlich die Erreichbarkeit
+   der Anwendung, keine erfolgreiche Anmeldung bei Apple.
+
+Bei jeder Änderung auf `main` startet Render einen neuen Build. Das Build-Skript
+führt die Tests aus; bei fehlgeschlagenen Tests wird die Version nicht bereitgestellt.
+Der OAuth-Zustand bleibt unter `/var/data/icloud-mail` erhalten. Wegen des einzelnen
+Datenträgers kann beim Deployment eine kurze Unterbrechung entstehen.
+
+Diese Automatik ist für Deinen eigenen Dienst vorgesehen. Wenn Du den Blueprint
+für eine unabhängige Installation übernimmst, verwende Deinen eigenen Fork oder
+setze `autoDeployTrigger: off`, damit Änderungen im Ursprungsrepository nicht
+ungefragt Deinen Dienst aktualisieren.
+
+Eine eigene Domain ist optional. Falls Du eine einrichtest, setze
+`ICLOUD_PUBLIC_URL` auf die kanonische HTTPS-Domain ohne Pfad und verbinde ChatGPT
+anschließend neu. Verwende nur diese eine eigene Domain, da der Server den
+Host-Header darauf beschränkt. Bei abweichender Ordnererkennung kannst Du
+`ICLOUD_DRAFTS_FOLDER` in Render ergänzen.
+
+Im Umgebungsmodus liegen Zugangsdaten in den Render-Umgebungsvariablen und im
+Prozessspeicher; es wird keine zusätzliche Konfigurationsdatei mit Passwort erzeugt.
+Die Dateikonfiguration für lokale und Docker-Installationen bleibt unverändert.
+
+Der Blueprint und der Startmodus wurden lokal geprüft. Ein Deployment im
+Render-Konto und ein Test mit echten iCloud-Zugangsdaten stehen noch aus.
+
 ## Einrichtung auf Deinem Rechner
 
 Voraussetzung: Python 3.12 oder neuer.
