@@ -51,8 +51,11 @@ with folder listing have been verified. All five tools are registered on the liv
 server. Browser login now preserves the same-origin form Origin header and allows
 the registered callback origin through the form CSP. Regression tests cover the
 login headers, cookie binding, rejected foreign origins, and OAuth redirects.
-**The Docker build remains untested; end-to-end account linking in ChatGPT is
-still awaiting confirmation.**
+ChatGPT account linking and folder listing have been confirmed. An iCloud search
+syntax error was reproduced against the live server: UID SEARCH requires an
+explicit CHARSET keyword. The corrected queries were verified for unfiltered,
+date-filtered, and Unicode searches; regression tests also cover draft lookup.
+**The Docker build remains untested.**
 The server is designed for a single owner and one process. It is not a public
 multi-account service.
 
@@ -101,7 +104,8 @@ is unchanged.
 
 The blueprint and startup mode have been validated locally and deployed on Render.
 The deployment passed the test suite, and a real iCloud folder listing succeeded.
-ChatGPT account linking still requires end-to-end verification.
+ChatGPT account linking and folder listing have also been confirmed. Corrected
+searches and message reads have been verified directly against the live mailbox.
 
 ## Local setup
 

@@ -59,6 +59,9 @@ class FakeIMAP:
     def uid(self, operation, *args):
         self.calls.append((operation, *args))
         if operation == 'SEARCH':
+            # uid() forwards its arguments verbatim; RFC 3501 requires the
+            # CHARSET keyword before a supplied encoding name.
+            assert args[:2] == ('CHARSET', 'UTF-8'), 'Invalid UID SEARCH charset syntax'
             if b'Message-ID' in args[-1]:
                 return 'OK', [b'9' if self.saved else b'']
             return 'OK', [b'2 5 8']
@@ -99,6 +102,14 @@ def test_search_pagination_and_read_identity(mailbox):
     with pytest.raises(MailError, match='identity changed'):
         box.read('INBOX', 43, 8)
     assert box.search(before_uid=1)['messages'] == []
+
+
+def test_search_utf8_criteria(mailbox):
+    box, client = mailbox
+    result = box.search(subject='Grüße', limit=1)
+    assert len(result['messages']) == 1
+    command = next(c for c in client.calls if c[0] == 'SEARCH')
+    assert command == ('SEARCH', 'CHARSET', 'UTF-8', 'ALL SUBJECT "Grüße"'.encode('utf-8'))
 
 
 def test_draft_idempotency_and_reply(mailbox):

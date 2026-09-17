@@ -186,7 +186,8 @@ class Mailbox:
         return validity
 
     def _search(self, client, criteria):
-        status, rows = client.uid('SEARCH', 'UTF-8', ' '.join(criteria).encode('utf-8'))
+        # Unlike search(), uid() does not insert the CHARSET keyword.
+        status, rows = client.uid('SEARCH', 'CHARSET', 'UTF-8', ' '.join(criteria).encode('utf-8'))
         if status != 'OK':
             raise MailError("Search failed; iCloud did not accept the search criteria.")
         return [int(x) for x in (rows[0] or b'').split()]
