@@ -68,6 +68,7 @@ def test_discovery_protection_and_host(client):
     assert discovery['registration_endpoint'].endswith('/register')
     resource = client.get('/.well-known/oauth-protected-resource/mcp').json()
     assert resource['resource'] == 'https://mail.example.org/mcp'
+    assert set(resource['scopes_supported']) == {'mail:read', 'mail:drafts'}
     assert client.get('/login', headers={'host':'attacker.example'}).status_code == 400
     assert client.post('/login', data={'csrf':'bad','flow':'bad','key':KEY}).status_code == 403
     assert client.post('/login', content=b'x'*(1024*1024+1)).status_code == 413

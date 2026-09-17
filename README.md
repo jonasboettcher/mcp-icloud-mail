@@ -46,9 +46,11 @@ Tests cover MIME, Unicode characters, HTML, attachments, UIDVALIDITY, read statu
 search filters, draft retries, threading, OAuth/PKCE, access controls, token rotation,
 revocation, restart persistence, and MCP initialization.
 
-**A real iCloud login, the Docker build, and account linking in ChatGPT have not yet
-been tested.** These require your credentials and a target host. The server is
-designed for a single owner and one process. It is not a public multi-account service.
+A Render deployment, public HTTPS/OAuth discovery, and a real iCloud IMAP login
+with folder listing have been verified. All five tools are registered on the live
+server. **The Docker build and account linking in ChatGPT have not yet been tested.**
+The server is designed for a single owner and one process. It is not a public
+multi-account service.
 
 ## Single-account prototype on Render
 
@@ -93,8 +95,9 @@ variables and process memory; no additional configuration file containing the
 password is created. File-based configuration for local and Docker installations
 is unchanged.
 
-The blueprint and startup mode have been validated locally. Deployment in a Render
-account and testing with real iCloud credentials are still pending.
+The blueprint and startup mode have been validated locally and deployed on Render.
+The deployment passed the test suite, and a real iCloud folder listing succeeded.
+ChatGPT account linking still requires end-to-end verification.
 
 ## Local setup
 

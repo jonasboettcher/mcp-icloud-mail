@@ -8,7 +8,7 @@ import uvicorn
 from anyio import to_thread
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
-from mcp.server.auth.routes import build_metadata, cors_middleware
+from mcp.server.auth.routes import build_metadata, cors_middleware, create_protected_resource_routes
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.transport_security import RequestBodyLimitMiddleware, TransportSecuritySettings
@@ -159,7 +159,12 @@ def http_app(config):
     metadata.revocation_endpoint_auth_methods_supported = ['none', 'client_secret_post']
     async def discovery(request):
         return JSONResponse(metadata.model_dump(mode='json', exclude_none=True))
+    # Advertise all available permissions without requiring write access for reads.
+    resource_routes = {route.path: route for route in create_protected_resource_routes(
+        auth.resource_server_url, [auth.issuer_url], scopes_supported=SCOPES)}
     for i, route in enumerate(app.routes):
+        if getattr(route, 'path', None) in resource_routes:
+            app.routes[i] = resource_routes[route.path]
         if getattr(route, 'path', None) == '/revoke':
             app.routes[i] = Route('/revoke', cors_middleware(server._auth_server_provider.revoke_request, ['POST', 'OPTIONS']), methods=['POST', 'OPTIONS'])
         if getattr(route, 'path', None) == '/.well-known/oauth-authorization-server':
