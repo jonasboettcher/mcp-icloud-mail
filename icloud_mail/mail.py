@@ -1,6 +1,7 @@
 import base64
 import binascii
 import contextlib
+import copy
 import email.policy
 import hashlib
 import imaplib
@@ -118,7 +119,7 @@ class PlainHTML(HTMLParser):
 
 def parse_message(raw):
     msg = BytesParser(policy=email.policy.default).parsebytes(raw)
-    result = {key: str(msg.get(key, '')) for key in ('subject', 'from', 'to', 'cc', 'date', 'message-id', 'in-reply-to', 'references', 'reply-to')}
+    result = {key: str(msg.get(key, '')) for key in ('subject', 'from', 'to', 'cc', 'bcc', 'date', 'message-id', 'in-reply-to', 'references', 'reply-to')}
     part = msg.get_body(preferencelist=('plain', 'html'))
     text = ''
     if part:
@@ -192,6 +193,22 @@ def draft_message(sender, to, subject, body, cc, bcc, request_id, reply_headers=
     return msg
 
 
+def draft_snapshot(raw):
+    """Hash the complete MIME message after consistent parsing and serialization."""
+    msg = BytesParser(policy=email.policy.SMTP).parsebytes(raw)
+    del msg['X-ICloud-MCP-Update-Result']
+    return hashlib.sha256(msg.as_bytes()).hexdigest()
+
+
+def preserved_parts(msg):
+    """Keep attachments and inline resources, including nested MIME containers."""
+    for part in msg.iter_parts():
+        if part.get_filename() or part.get_content_disposition() == 'attachment' or part.get('Content-ID'):
+            yield copy.deepcopy(part)
+        elif part.is_multipart():
+            yield from preserved_parts(part)
+
+
 class Mailbox:
     def __init__(self, config: Config):
         self.config = config
@@ -219,7 +236,30 @@ class Mailbox:
 
     def folders(self):
         with self.connection() as client:
-            return {'folders': self._folders(client)}
+            status, rows = client.capability()
+            capabilities = b' '.join(rows or []).decode('ascii').upper().split() if status == 'OK' else []
+            return {'folders': self._folders(client), 'draft_updates_supported': 'MOVE' in capabilities}
+
+    def _drafts_folder(self, client):
+        if self.config.drafts_folder:
+            return self.config.drafts_folder
+        drafts = [f['name'] for f in self._folders(client) if '\\Drafts' in f['flags']]
+        if len(drafts) != 1:
+            raise MailError('Drafts folder is ambiguous. Set drafts_folder in configuration.')
+        return drafts[0]
+
+    def _flags(self, client, uid):
+        status, rows = client.uid('FETCH', str(uid), '(UID FLAGS)')
+        if status != 'OK':
+            raise MailError('Cannot verify draft flags.')
+        for row in rows or []:
+            if not isinstance(row, bytes):
+                continue
+            identity = re.search(rb'\bUID (\d+)\b', row)
+            flags = re.search(rb'\bFLAGS \(([^)]*)\)', row)
+            if identity and int(identity[1]) == uid and flags:
+                return set(flags[1].decode('ascii').lower().split())
+        return None
 
     def _select(self, client, folder, expected=None, readonly=True):
         status, _ = client.select(quoted(utf7_encode(folder)), readonly=readonly)
@@ -334,12 +374,7 @@ class Mailbox:
             raw = msg.as_bytes()
             if len(raw) > self.config.max_message_bytes:
                 raise MailError('Draft exceeds the configured message size limit after MIME encoding.')
-            folder = self.config.drafts_folder
-            if not folder:
-                drafts = [f['name'] for f in self._folders(client) if '\\Drafts' in f['flags']]
-                if len(drafts) != 1:
-                    raise MailError("Drafts folder is ambiguous. Set drafts_folder in configuration.")
-                folder = drafts[0]
+            folder = self._drafts_folder(client)
             validity = self._select(client, folder, readonly=False)
             existing = self._search(client, ['HEADER', 'Message-ID', quoted(str(msg['Message-ID']))])
             reused = bool(existing)
@@ -358,3 +393,126 @@ class Mailbox:
                                      'size': len(p.get_payload(decode=True) or b'')} for p in msg.iter_attachments()],
                     'mailbox_url': 'https://www.icloud.com/mail/',
                     'link_note': 'Opens iCloud Mail; a stable direct draft URL is not provided by IMAP.'}
+
+    def update_draft(self, folder, uidvalidity, uid, expected_message_id, request_id,
+                     to=None, cc=None, bcc=None, subject=None, body=None, attachments=None):
+        if uid < 1 or uidvalidity < 1:
+            raise MailError('UID and UIDVALIDITY must be positive.')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,128}', request_id):
+            raise MailError('request_id must contain 16–128 letters, digits, underscores or hyphens.')
+        if not expected_message_id or len(expected_message_id) > 998:
+            raise MailError('Supply the exact Message-ID returned by read_message.')
+        quoted(expected_message_id)
+        if all(x is None for x in (to, cc, bcc, subject, body)) and not attachments:
+            raise MailError('Supply at least one changed field or attachment.')
+        changes = {}
+        for name, values in [('To', to), ('Cc', cc), ('Bcc', bcc)]:
+            if values is not None:
+                changes[name] = addresses(values)
+        if subject is not None:
+            if len(subject) > 998:
+                raise MailError('Subject too long.')
+            quoted(subject)
+            changes['Subject'] = subject
+        if body is not None and len(body.encode('utf-8')) > 500_000:
+            raise MailError('Draft body too large.')
+        files = decode_attachments(attachments)
+        intent = [folder, uidvalidity, uid, expected_message_id, changes, body,
+                  [[name, media, hashlib.sha256(data).hexdigest()] for name, media, data in files]]
+        input_hash = hashlib.sha256(json.dumps(intent, sort_keys=True).encode()).hexdigest()
+        key = hashlib.sha256((self.config.email + '\0update\0' + request_id).encode()).hexdigest()
+        message_id = f'<{key}@icloud-mail-mcp.local>'
+        with self.write_lock, self.connection() as client:
+            if folder != self._drafts_folder(client):
+                raise MailError('Only the configured Drafts folder can be updated.')
+            self._select(client, folder, uidvalidity, readonly=False)
+            status, capabilities = client.capability()
+            if status != 'OK' or b'MOVE' not in b' '.join(capabilities or []).upper().split():
+                raise MailError('Safe draft updates require IMAP MOVE; no draft was changed.')
+            trash = [f['name'] for f in self._folders(client) if '\\Trash' in f['flags']]
+            if len(trash) != 1 or trash[0] == folder:
+                raise MailError('Trash folder is ambiguous; no draft was changed.')
+            found = self._search(client, ['HEADER', 'Message-ID', quoted(message_id)])
+            if len(found) > 1 or uid in found:
+                raise MailError('Replacement identity is ambiguous; no draft was removed.')
+            reused = bool(found)
+            if not found:
+                flags = self._flags(client, uid)
+                if not flags or '\\draft' not in flags or '\\deleted' in flags:
+                    raise MailError('Target is missing or is not an active draft. Read it again.')
+                original = self._fetch(client, uid)
+                msg = BytesParser(policy=email.policy.SMTP).parsebytes(original)
+                if msg.get_all('Message-ID') != [expected_message_id]:
+                    raise MailError('Draft Message-ID changed. Read it again before updating.')
+                if msg.get_content_type() in ('multipart/signed', 'multipart/encrypted'):
+                    raise MailError('Signed or encrypted drafts cannot be updated safely.')
+                for header in list(msg.keys()):
+                    if header.lower().startswith('x-icloud-mcp-'):
+                        del msg[header]
+                for name, value in changes.items():
+                    del msg[name]
+                    if value:
+                        msg[name] = value
+                if body is not None:
+                    kept = list(preserved_parts(msg))
+                    msg.clear_content()
+                    msg.set_content(body)
+                    for part in kept:
+                        if msg.get_content_type() != 'multipart/mixed':
+                            msg.make_mixed()
+                        msg.attach(part)
+                for name, media, data in files:
+                    maintype, subtype = media.split('/')
+                    msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=name)
+                del msg['Message-ID']
+                msg['Message-ID'] = message_id
+                msg['X-ICloud-MCP-Update-Input'] = input_hash
+                msg['X-ICloud-MCP-Update-Source'] = hashlib.sha256(original).hexdigest()
+                # Serialize once to fix MIME boundaries before storing the verification hash.
+                msg['X-ICloud-MCP-Update-Result'] = draft_snapshot(msg.as_bytes())
+                raw = msg.as_bytes()
+                meta = parse_message(raw)['attachments']
+                if len(meta) > MAX_ATTACHMENTS or sum(p['size'] for p in meta) > MAX_ATTACHMENT_BYTES:
+                    raise MailError('Updated draft exceeds 10 attachments or the combined 10 MiB limit.')
+                if len(raw) > self.config.max_message_bytes:
+                    raise MailError('Draft exceeds the configured message size limit after MIME encoding.')
+                append_flags = '(\\Draft \\Seen)' if '\\seen' in flags else '(\\Draft)'
+                status, _ = client.append(quoted(utf7_encode(folder)), append_flags, None, raw)
+                if status != 'OK':
+                    raise MailError('Draft save was not confirmed. Retry with the same request_id and arguments.')
+                found = self._search(client, ['HEADER', 'Message-ID', quoted(message_id)])
+                if len(found) != 1 or found[0] == uid:
+                    raise MailError('Saved replacement could not be identified. Original retained; retry with the same request_id.')
+            replacement_uid = found[0]
+            saved_raw = self._fetch(client, replacement_uid)
+            saved = BytesParser(policy=email.policy.SMTP).parsebytes(saved_raw)
+            if saved.get('X-ICloud-MCP-Update-Input', '').strip() != input_hash:
+                raise MailError('request_id was already used for different content. Use a new request_id.')
+            if saved.get('Message-ID') != message_id or saved.get('X-ICloud-MCP-Update-Result', '').strip() != draft_snapshot(saved_raw):
+                raise MailError('Replacement verification failed. Original retained; inspect both drafts before retrying.')
+            saved_flags = self._flags(client, replacement_uid)
+            if not saved_flags or '\\draft' not in saved_flags or '\\deleted' in saved_flags:
+                raise MailError('Replacement is no longer an active draft. Original retained.')
+            result = {'saved': True, 'updated': False, 'reused': reused, 'folder': folder,
+                      'uidvalidity': uidvalidity, 'uid': replacement_uid, 'message_id': message_id,
+                      'previous_uid': uid, 'previous_draft_removed': False, 'cleanup_pending': False,
+                      'attachments': parse_message(saved_raw)['attachments'],
+                      'mailbox_url': 'https://www.icloud.com/mail/',
+                      'link_note': 'Opens iCloud Mail; a stable direct draft URL is not provided by IMAP.'}
+            old_flags = self._flags(client, uid)
+            if old_flags is not None:
+                if '\\draft' not in old_flags or '\\deleted' in old_flags:
+                    raise MailError('Original draft flags changed. Replacement saved; original was not moved.')
+                if hashlib.sha256(self._fetch(client, uid)).hexdigest() != saved.get('X-ICloud-MCP-Update-Source', '').strip():
+                    raise MailError('Original draft content changed. Replacement saved; original was not moved.')
+                # MOVE targets exactly one UID and never expunges unrelated deleted messages.
+                try:
+                    status, _ = client.uid('MOVE', str(uid), quoted(utf7_encode(trash[0])))
+                    if status != 'OK' or self._flags(client, uid) is not None:
+                        raise MailError('The old draft is still present.')
+                except (MailError, imaplib.IMAP4.error, OSError):
+                    result.update(cleanup_pending=True, warning='Replacement saved and verified, but moving the old draft was not confirmed. Retry with the same request_id and arguments.')
+                    return result
+                result['previous_draft_moved_to'] = trash[0]
+            result.update(updated=True, previous_draft_removed=True)
+            return result

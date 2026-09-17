@@ -34,15 +34,15 @@ The setup instructions below describe the existing single-account prototype.
 | `read_message` | Read a message as text, including recipient and threading information |
 | `read_attachment` | Read attachments in bounded Base64 chunks |
 | `create_draft` | Save a new text draft with file attachments directly in iCloud, preserving threading for replies |
+| `update_draft` | Edit one identified draft or add files, then move the previous version to Trash after verifying the replacement |
 
-Reading does not change unread status. Existing messages and drafts are preserved.
-Sending, deleting, automatic forwarding, and editing existing drafts are not
-implemented. To add files to a previously saved draft, create a new version;
-the original draft is preserved.
+Reading does not change unread status. `create_draft` preserves existing drafts;
+`update_draft` replaces only the explicitly identified draft. Sending, permanent
+deletion, and automatic forwarding are not implemented.
 
 ### Draft attachments
 
-`create_draft` accepts an optional `attachments` array. Each entry contains:
+Both draft tools accept an optional `attachments` array. Each entry contains:
 
 | Field | Value |
 | --- | --- |
@@ -62,7 +62,46 @@ unchanged content; use a new identifier when adding or changing attachments.
 
 The result includes each attachment's file name, MIME type, and decoded byte count.
 After upgrading an existing ChatGPT connection, refresh its tool metadata and open
-a new conversation so `create_draft` exposes the new `attachments` parameter.
+a new conversation so both draft tools and their attachment parameters are available.
+
+### Updating an existing draft
+
+Read the draft first. Call `update_draft` with its exact `folder`, `uidvalidity`,
+`uid`, and `expected_message_id` (the `message-id` returned by `read_message`), plus
+a new `request_id` and the fields to change. Omitted fields keep their original
+values. An empty To/CC/BCC list clears that recipient field. Sender and reply
+threading remain unchanged.
+
+`attachments` adds files to the draft's existing attachments. The attachment
+count and size limits apply to the resulting draft, including existing files.
+Omit `body` to preserve text, HTML, and inline images. Supplying `body` replaces
+the message body with plain text while preserving attachments and inline resources.
+
+IMAP message content is immutable, so the update uses this sequence:
+
+1. Validate the Drafts folder, UIDVALIDITY, exact Message-ID, and active Draft flag.
+2. Save the updated MIME message as a draft with a new UID and Message-ID.
+3. Read the complete replacement back and verify its content, headers, and files.
+4. Recheck the original and move only its UID to the special-use Trash folder.
+
+The operation requires [IMAP MOVE](https://datatracker.ietf.org/doc/html/rfc6851)
+and an unambiguous Trash folder. `list_folders` reports `draft_updates_supported`
+for the MOVE capability. Missing capability or folder identification stops the
+operation before writing. Unrelated drafts and messages are never moved or
+expunged. The old version is recoverable from Trash subject to the account's
+normal Trash retention; the connector does not permanently delete it.
+
+Use the returned UID and Message-ID for the next edit. If a request times out,
+retry with the **same request_id and original arguments**, including the old UID.
+The saved replacement records the operation and content fingerprints, so retries
+resume cleanup without saving another replacement. Changed inputs with the same
+identifier are rejected. A `cleanup_pending: true` result means the replacement
+was saved and verified, but moving the old draft was not confirmed; do not report
+the update as complete. Retry that same request to finish cleanup. A replacement
+that was externally edited, deleted, or sent is not used to remove an old draft.
+
+Signed and encrypted MIME drafts are rejected. Concurrent external changes cause
+verification to stop; there is no cross-client transaction or automatic merge.
 
 ## Validation status
 
@@ -72,8 +111,11 @@ search filters, draft retries, threading, OAuth/PKCE, access controls, token rot
 revocation, restart persistence, and MCP initialization.
 
 A Render deployment, public HTTPS/OAuth discovery, and a real iCloud IMAP login
-with folder listing have been verified. All five tools are registered on the live
-server. Browser login now preserves the same-origin form Origin header and allows
+with folder listing have been verified. Draft updates are tested with simulated
+IMAP, including failed saves, read-back corruption, concurrent changes, lost
+responses, and retries before and after moving the old draft. A real-mailbox
+draft update has not yet been verified. Browser login now preserves the
+same-origin form Origin header and allows
 the registered callback origin through the form CSP. Regression tests cover the
 login headers, cookie binding, rejected foreign origins, and OAuth redirects.
 ChatGPT account linking and folder listing have been confirmed. An iCloud search
@@ -211,7 +253,7 @@ Following the [OpenAI guide](https://developers.openai.com/plugins/deploy/connec
    secret manually in the connection settings.
 4. Review the client, redirect URL, and permissions on the login page. Enter your
    connector key there.
-5. Check the five discovered tools and enable the connection in a new chat.
+5. Check the six discovered tools and enable the connection in a new chat.
 
 Your Apple password is not passed to ChatGPT during this process. Connection setup
 depends on the features available to your account.
@@ -258,14 +300,15 @@ system user's permissions apply; OAuth is used for HTTP access.
 - IMAP does not provide a verified, stable iCloud web link to an individual draft.
   The result includes a link to iCloud Mail, the folder, Message-ID, and UID when
   available. The link must not be described as a direct draft link.
-- Each draft is saved as a new entry. Use a new `request_id` for a different version;
-  the previous version is preserved.
+- Use `create_draft` for a new draft and `update_draft` to edit an existing one.
+  Successful updates leave one current version in Drafts and move the old version
+  to Trash. Unrelated pre-existing versions are never automatically cleaned up.
 
 ## Access controls and operation
 
 HTTP access is protected by OAuth Authorization Code with S256-PKCE. The server
 provides discovery, registration, login, token refresh, and revocation. The scopes
-are `mail:read` and `mail:drafts`; the write operation checks its scope in addition
+are `mail:read` and `mail:drafts`; both draft operations check their scope in addition
 to general authentication.
 
 Access tokens expire after one hour; rotating refresh tokens expire after 30 days.

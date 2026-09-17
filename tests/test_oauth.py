@@ -128,7 +128,8 @@ def test_oauth_pkce_replay_refresh_and_revoke(client, config):
     assert init.status_code == 200, init.text
     assert init.json()['result']['serverInfo']['name'] == 'iCloud Mail'
     listed = rpc(client, token['access_token'], 'tools/list').json()['result']['tools']
-    assert {t['name'] for t in listed} == {'list_folders','search_messages','read_message','read_attachment','create_draft'}
+    assert {t['name'] for t in listed} == {'list_folders','search_messages','read_message','read_attachment','create_draft','update_draft'}
+    assert next(t for t in listed if t['name'] == 'update_draft')['annotations']['destructiveHint']
     assert not next(t for t in listed if t['name']=='create_draft')['annotations']['readOnlyHint']
     # Tokens persist across restarts, while their plaintext never appears in storage.
     other = OAuthProvider(config)
@@ -161,6 +162,35 @@ def test_scope_enforcement_no_imap_needed(client, monkeypatch):
     result = response.json()['result']
     assert result['isError'] is True
     assert 'mail:drafts' in result['content'][0]['text']
+    update = rpc(client, token, 'tools/call', {'name':'update_draft', 'arguments':{
+        'folder':'Drafts', 'uidvalidity':42, 'uid':8, 'expected_message_id':'<test@example.org>',
+        'request_id':'update_request_001', 'body':'new'}}).json()['result']
+    assert update['isError'] and 'mail:drafts' in update['content'][0]['text']
+
+
+def test_update_draft_through_authenticated_mcp(client, monkeypatch):
+    import contextlib
+    from icloud_mail.mail import Mailbox
+    from test_update_draft import UpdateIMAP
+    from email.parser import BytesParser
+    from email.policy import SMTP
+    imap = UpdateIMAP()
+    @contextlib.contextmanager
+    def connection(self):
+        yield imap
+    monkeypatch.setattr(Mailbox, 'connection', connection)
+    cid = register(client)
+    token = client.post('/token', data=login(client, cid)).json()['access_token']
+    arguments = {'folder':'Drafts', 'uidvalidity':42, 'uid':8,
+                 'expected_message_id':BytesParser(policy=SMTP).parsebytes(imap.original)['Message-ID'],
+                 'request_id':'mcp_update_request_001', 'subject':'Changed through MCP',
+                 'attachments':[{'filename':'extra.txt', 'content_base64':'SGVsbG8='}]}
+    response = rpc(client, token, 'tools/call', {'name':'update_draft', 'arguments':arguments}).json()['result']
+    assert not response.get('isError'), response
+    payload = response.get('structuredContent') or json.loads(response['content'][0]['text'])
+    assert payload['updated'] and payload['uid'] == 21
+    assert BytesParser(policy=SMTP).parsebytes(imap.messages[21])['Subject'] == 'Changed through MCP'
+    assert 8 not in imap.messages
 
 
 def test_invalid_registration_resource_and_origin(client):
