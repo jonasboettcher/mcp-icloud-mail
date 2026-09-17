@@ -1,4 +1,5 @@
 import contextlib
+import base64
 from email.parser import BytesParser
 from email.policy import default
 
@@ -69,6 +70,8 @@ class FakeIMAP:
         if args[1] == '(RFC822.SIZE)':
             return 'OK', [f'1 (RFC822.SIZE {len(raw)})'.encode()]
         assert 'BODY.PEEK[' in args[1]
+        if 'BODY.PEEK[HEADER]' in args[1]:
+            raw = raw.split(b'\r\n\r\n', 1)[0] + b'\r\n\r\n'
         return 'OK', [(b'1 (BODY[] {100}', raw), b')']
     def append(self, folder, flags, when, raw):
         self.calls.append(('append', folder, flags))
@@ -132,3 +135,66 @@ def test_size_limit_and_recipient_validation(mailbox):
         box.read('INBOX', 42, 8)
     with pytest.raises(MailError):
         draft_message('owner@icloud.com', ['a@example.org, b@example.org'], 's', '', [], [], 'unique_request_001')
+
+
+def attachment(data=b'\x00\xffPDF bytes', filename='Prüfung 日本語.pdf', content_type='application/pdf'):
+    return dict(filename=filename, content_type=content_type, content_base64=base64.b64encode(data).decode())
+
+
+def test_attachment_draft_roundtrip_and_retries(mailbox):
+    box, client = mailbox
+    files = [attachment(), attachment(b'Hello', 'notes.txt', 'text/plain')]
+    args = dict(to=['p@example.org'], cc=['cc@example.org'], bcc=['bcc@example.org'], subject='Re: Test',
+                body='Grüße', request_id='attachment_request_001', attachments=files,
+                reply_folder='INBOX', reply_uidvalidity=42, reply_uid=8)
+    result = box.create_draft(**args)
+    parsed = BytesParser(policy=default).parsebytes(client.saved)
+    assert parsed.get_body().get_content().strip() == 'Grüße'
+    assert parsed['Cc'] == 'cc@example.org' and parsed['Bcc'] == 'bcc@example.org'
+    assert parsed['In-Reply-To'] == '<original@example.org>'
+    for part, item, metadata in zip(parsed.iter_attachments(), files, result['attachments'], strict=True):
+        assert part.get_content_disposition() == 'attachment'
+        assert part.get_filename() == metadata['filename'] == item['filename']
+        assert part.get_content_type() == metadata['content_type'] == item['content_type']
+        assert part.get_payload(decode=True) == base64.b64decode(item['content_base64'])
+        assert metadata['size'] == len(part.get_payload(decode=True))
+    assert box.create_draft(**args)['reused']
+    for changed in ([attachment(b'changed'), files[1]], [attachment(filename='other.pdf'), files[1]],
+                    [attachment(content_type='application/octet-stream'), files[1]], files[::-1], []):
+        with pytest.raises(MailError, match='different content'):
+            box.create_draft(**dict(args, attachments=changed))
+    assert sum(c[0] == 'append' for c in client.calls) == 1
+
+
+@pytest.mark.parametrize('changed', [
+    {'content_base64': 'invalid!'}, {'content_base64': '日本語'}, {'filename': '../file.pdf'},
+    {'filename': 'C:\\file.pdf'}, {'filename': 'file\r\nX: injected'},
+    {'content_type': 'text/plain; charset=utf-8'}, {'content_type': 'multipart/mixed'},
+    {'content_type': 'message/rfc822'}, {'content_type': 'text/plain\r\nX: injected'},
+])
+def test_invalid_attachment_is_not_saved(mailbox, changed):
+    box, client = mailbox
+    with pytest.raises(MailError):
+        box.create_draft([], 'Test', 'Body', 'attachment_request_001', attachments=[dict(attachment(), **changed)])
+    assert client.saved is None
+
+
+def test_attachment_limits(mailbox):
+    box, client = mailbox
+    args = dict(to=[], subject='Test', body='Body', request_id='attachment_request_001')
+    with pytest.raises(MailError, match='At most 10'):
+        box.create_draft(**args, attachments=[attachment()] * 11)
+    with pytest.raises(MailError, match='combined 10 MiB'):
+        box.create_draft(**args, attachments=[attachment(b'x'*(5*1024*1024+1))] * 2)
+    box.config.max_message_bytes = 1000
+    with pytest.raises(MailError, match='after MIME encoding'):
+        box.create_draft(**args, attachments=[attachment(b'x'*1000)])
+    assert client.saved is None
+
+
+def test_empty_attachment_list_preserves_retry_identity():
+    args = ('owner@icloud.com', [], 'Test', 'Body', [], [], 'attachment_request_001')
+    original = draft_message(*args)
+    empty = draft_message(*args, attachments=[])
+    assert original['X-ICloud-MCP-Content-SHA256'] == empty['X-ICloud-MCP-Content-SHA256']
+    assert not empty.is_multipart()

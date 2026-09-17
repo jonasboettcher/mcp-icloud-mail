@@ -179,3 +179,39 @@ def test_rate_limit(client):
     for _ in range(30):
         client.get('/login')
     assert client.get('/login').status_code == 429
+
+
+def test_attachment_tool_schema_and_upload(client, monkeypatch):
+    import contextlib
+    from email.parser import BytesParser
+    from email.policy import default
+    from icloud_mail.mail import Mailbox
+    from test_mail import FakeIMAP
+    imap = FakeIMAP()
+    @contextlib.contextmanager
+    def connection(self):
+        yield imap
+    monkeypatch.setattr(Mailbox, 'connection', connection)
+    cid = register(client)
+    token = client.post('/token', data=login(client, cid)).json()['access_token']
+    listed = rpc(client, token, 'tools/list').json()['result']['tools']
+    schema = next(t for t in listed if t['name'] == 'create_draft')['inputSchema']
+    assert 'attachments' in schema['properties']
+    assert 'content_base64' in json.dumps(schema)
+    # Exercise the real authenticated MCP handler with a payload over the old 1 MiB limit.
+    data = bytes(range(256)) * 4096
+    arguments = dict(to=['p@example.org'], subject='File test', body='Attached', request_id='mcp_attachment_001',
+                     attachments=[dict(filename='test.bin', content_base64=base64.b64encode(data).decode())])
+    response = rpc(client, token, 'tools/call', {'name': 'create_draft', 'arguments': arguments})
+    assert response.status_code == 200
+    result = response.json()['result']
+    assert not result.get('isError'), result
+    parsed = BytesParser(policy=default).parsebytes(imap.saved)
+    part = next(parsed.iter_attachments())
+    assert part.get_payload(decode=True) == data
+    assert part.get_content_type() == 'application/octet-stream'
+    repeated = rpc(client, token, 'tools/call', {'name': 'create_draft', 'arguments': arguments}).json()['result']
+    payload = repeated.get('structuredContent') or json.loads(repeated['content'][0]['text'])
+    assert payload['reused']
+    assert sum(c[0] == 'append' for c in imap.calls) == 1
+    assert client.post('/mcp', content=b'x'*(16*1024*1024+1)).status_code == 413

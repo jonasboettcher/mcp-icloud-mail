@@ -33,11 +33,36 @@ The setup instructions below describe the existing single-account prototype.
 | `search_messages` | Search each folder by text, sender, recipient, subject, date, and unread status |
 | `read_message` | Read a message as text, including recipient and threading information |
 | `read_attachment` | Read attachments in bounded Base64 chunks |
-| `create_draft` | Save a new text draft directly in iCloud, preserving threading for replies |
+| `create_draft` | Save a new text draft with file attachments directly in iCloud, preserving threading for replies |
 
 Reading does not change unread status. Existing messages and drafts are preserved.
-Sending, deleting, and automatic forwarding are not implemented. Attachments in new
-drafts and editing existing drafts are not included in this version.
+Sending, deleting, automatic forwarding, and editing existing drafts are not
+implemented. To add files to a previously saved draft, create a new version;
+the original draft is preserved.
+
+### Draft attachments
+
+`create_draft` accepts an optional `attachments` array. Each entry contains:
+
+| Field | Value |
+| --- | --- |
+| `filename` | File name without directory components, up to 255 characters |
+| `content_base64` | Standard Base64 of the actual file bytes, without a data URL prefix |
+| `content_type` | MIME media type, such as `application/pdf`; defaults to `application/octet-stream` |
+
+Read the selected file and encode its bytes before calling the tool. Local paths,
+download URLs, and ChatGPT file IDs are not accepted as file contents. The connector
+does not download remote URLs or read server files. Do not invent attachment bytes.
+
+Up to 10 files and 10 MiB of combined decoded file data are supported per draft.
+The complete MIME message must also fit the configured message size limit.
+Replies preserve threading and explicit To/CC/BCC fields. Retry detection includes
+attachment names, MIME types, order, and file contents. Reuse `request_id` only with
+unchanged content; use a new identifier when adding or changing attachments.
+
+The result includes each attachment's file name, MIME type, and decoded byte count.
+After upgrading an existing ChatGPT connection, refresh its tool metadata and open
+a new conversation so `create_draft` exposes the new `attachments` parameter.
 
 ## Validation status
 
@@ -162,7 +187,8 @@ docker compose -f compose.yaml -f compose.https.yaml up -d --build
 Caddy handles certificates and HTTPS. Connector port 8000 is published only on
 localhost. If you already have a reverse proxy, run `docker compose up -d --build`;
 forward the configured domain to port 8000 and preserve the original Host header.
-Limit HTTP request sizes to 1 MiB at the proxy.
+Allow request bodies up to 16 MiB on `/mcp` for Base64 attachments, and limit other
+routes to 1 MiB at the proxy. The application enforces these limits as well.
 
 The configuration and OAuth database are mounted as volumes. The process runs
 with the UID/GID determined during setup, without additional Linux capabilities,

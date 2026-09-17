@@ -19,7 +19,18 @@ from starlette.routing import Route
 
 from .auth import OAuthProvider, SCOPES
 from .config import load_config
-from .mail import Mailbox, MailError
+from .mail import DraftAttachment, Mailbox, MailError
+
+
+class RequestLimits:
+    """Allow Base64 file uploads only on MCP; keep authentication requests small."""
+    def __init__(self, app):
+        self.mcp = RequestBodyLimitMiddleware(app, max_body_size=16*1024*1024)
+        self.auth = RequestBodyLimitMiddleware(app, max_body_size=1024*1024)
+
+    async def __call__(self, scope, receive, send):
+        limited = self.mcp if scope.get('path') == '/mcp' else self.auth
+        await limited(scope, receive, send)
 
 
 class HTTPGuard:
@@ -73,6 +84,7 @@ def build_server(config, http=True):
         'This server reads mail and creates drafts; it has no sending or deleting tools. '
         'mailbox_url opens iCloud Mail and is not a direct link to a particular draft.',
         auth_server_provider=provider, auth=auth, stateless_http=True, json_response=True,
+        max_request_body_size=16*1024*1024,
         log_level='WARNING', transport_security=TransportSecuritySettings(
             allowed_hosts=[host], allowed_origins=[config.public_url, 'https://chatgpt.com']))
     mailbox = Mailbox(config)
@@ -132,14 +144,19 @@ def build_server(config, http=True):
     @operation('mail:drafts')
     def create_draft(to: list[str], subject: str, body: str, request_id: str,
                      cc: list[str] | None=None, bcc: list[str] | None=None,
-                     reply_folder: str | None=None, reply_uidvalidity: int | None=None, reply_uid: int | None=None) -> dict:
+                     reply_folder: str | None=None, reply_uidvalidity: int | None=None, reply_uid: int | None=None,
+                     attachments: list[DraftAttachment] | None=None) -> dict:
         """Save a NEW plain-text draft in iCloud; never send. Existing drafts are preserved.
         Resolve To/CC/BCC from the original thread and user instruction; do not guess or auto-copy recipients.
         request_id: unique 16–128 ASCII letters/digits/_/-; reuse it ONLY for retries with unchanged content.
         Supply all reply_* fields for a reply so In-Reply-To/References are set from the original.
-        Does not attach files. Returns the iCloud Mail entry URL, not an invented direct draft link.
+        attachments: up to 10 files, combined decoded size at most 10 MiB. Each has filename,
+        content_base64 (standard Base64 of actual file bytes), and optional content_type.
+        Read the user's files before encoding; never invent file bytes or pass local paths/URLs.
+        To add files to an existing draft, create a new version with a new request_id; the old draft remains.
+        Returns the iCloud Mail entry URL, not an invented direct draft link.
         """
-        return mailbox.create_draft(to, subject, body, request_id, cc, bcc, reply_folder, reply_uidvalidity, reply_uid)
+        return mailbox.create_draft(to, subject, body, request_id, cc, bcc, reply_folder, reply_uidvalidity, reply_uid, attachments)
 
     if provider:
         mcp.custom_route('/login', methods=['GET','POST'])(provider.login)
@@ -170,7 +187,7 @@ def http_app(config):
         if getattr(route, 'path', None) == '/.well-known/oauth-authorization-server':
             app.routes[i] = Route(route.path, cors_middleware(discovery, ['GET', 'OPTIONS']), methods=['GET', 'OPTIONS'])
     app.add_middleware(HTTPGuard, resource=config.public_url+'/mcp')
-    app.add_middleware(RequestBodyLimitMiddleware, max_body_size=1024*1024)
+    app.add_middleware(RequestLimits)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[urlsplit(config.public_url).hostname])
     return app
 

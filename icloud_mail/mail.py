@@ -1,8 +1,10 @@
 import base64
+import binascii
 import contextlib
 import email.policy
 import hashlib
 import imaplib
+import json
 import re
 import ssl
 import threading
@@ -11,12 +13,50 @@ from email.message import EmailMessage
 from email.parser import BytesParser
 from email.utils import format_datetime, getaddresses
 from html.parser import HTMLParser
+from pydantic import BaseModel, ConfigDict, Field
 
 from .config import Config
 
 
 class MailError(Exception):
     pass
+
+
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+MAX_ATTACHMENTS = 10
+
+
+class DraftAttachment(BaseModel):
+    model_config = ConfigDict(extra='forbid', hide_input_in_errors=True)
+
+    filename: str = Field(min_length=1, max_length=255, description='File name only, without a directory path.')
+    content_base64: str = Field(max_length=4 * ((MAX_ATTACHMENT_BYTES + 2) // 3),
+                                description='Standard Base64 of the actual file bytes, without a data URL prefix.')
+    content_type: str = Field(default='application/octet-stream', max_length=127,
+                              description='MIME media type, for example application/pdf or image/png.')
+
+
+def decode_attachments(attachments):
+    if len(attachments or []) > MAX_ATTACHMENTS:
+        raise MailError('At most 10 attachments per draft.')
+    decoded, total = [], 0
+    for value in attachments or []:
+        item = DraftAttachment.model_validate(value)
+        quoted(item.filename)
+        if item.filename in ('.', '..') or '/' in item.filename or '\\' in item.filename:
+            raise MailError('Attachment filename must be a file name without a directory path.')
+        content_type = item.content_type.lower()
+        if not re.fullmatch(r'[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*', content_type) or content_type.startswith(('multipart/', 'message/')):
+            raise MailError('Attachment content_type must be a single non-container MIME media type.')
+        try:
+            data = base64.b64decode(item.content_base64, validate=True)
+        except (binascii.Error, ValueError):
+            raise MailError('Attachment content_base64 must contain valid standard Base64.') from None
+        total += len(data)
+        if total > MAX_ATTACHMENT_BYTES:
+            raise MailError('Attachments exceed the combined 10 MiB limit.')
+        decoded.append((item.filename, content_type, data))
+    return decoded
 
 
 def quoted(value: str) -> str:
@@ -115,7 +155,7 @@ def addresses(values):
     return ', '.join(values)
 
 
-def draft_message(sender, to, subject, body, cc, bcc, request_id, reply_headers=None):
+def draft_message(sender, to, subject, body, cc, bcc, request_id, reply_headers=None, attachments=None):
     if not re.fullmatch(r'[A-Za-z0-9_-]{16,128}', request_id):
         raise MailError("request_id must contain 16–128 letters, digits, underscores or hyphens.")
     if len(body.encode('utf-8')) > 500_000 or len(subject) > 998:
@@ -140,6 +180,14 @@ def draft_message(sender, to, subject, body, cc, bcc, request_id, reply_headers=
     msg.set_content(body)
     # Bind retry keys to semantic content; Date is deliberately excluded.
     material = '\0'.join(str(msg.get(k, '')) for k in ('From', 'To', 'Cc', 'Bcc', 'Subject', 'In-Reply-To', 'References')) + '\0' + body
+    attachment_fingerprints = []
+    for filename, content_type, data in decode_attachments(attachments):
+        maintype, subtype = content_type.split('/')
+        msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
+        attachment_fingerprints.append([filename, content_type, hashlib.sha256(data).hexdigest()])
+    if attachment_fingerprints:
+        # Preserve fingerprints of existing attachment-free drafts across upgrades.
+        material += '\0attachments\0' + json.dumps(attachment_fingerprints, ensure_ascii=True, separators=(',', ':'))
     msg['X-ICloud-MCP-Content-SHA256'] = hashlib.sha256(material.encode()).hexdigest()
     return msg
 
@@ -273,7 +321,7 @@ class Mailbox:
                 'offset': offset, 'base64': base64.b64encode(data[offset:offset+length]).decode(),
                 'next_offset': offset+length if offset+length < len(data) else None}
 
-    def create_draft(self, to, subject, body, request_id, cc=None, bcc=None, reply_folder=None, reply_uidvalidity=None, reply_uid=None):
+    def create_draft(self, to, subject, body, request_id, cc=None, bcc=None, reply_folder=None, reply_uidvalidity=None, reply_uid=None, attachments=None):
         reply = (reply_folder, reply_uidvalidity, reply_uid)
         if any(x is not None for x in reply) and not all(x is not None for x in reply):
             raise MailError("Reply requires folder, UIDVALIDITY and UID together.")
@@ -282,7 +330,10 @@ class Mailbox:
             if reply_uid is not None:
                 self._select(client, reply_folder, reply_uidvalidity)
                 original = parse_message(self._fetch(client, reply_uid, headers=True))
-            msg = draft_message(self.config.email, to, subject, body, cc or [], bcc or [], request_id, original)
+            msg = draft_message(self.config.email, to, subject, body, cc or [], bcc or [], request_id, original, attachments)
+            raw = msg.as_bytes()
+            if len(raw) > self.config.max_message_bytes:
+                raise MailError('Draft exceeds the configured message size limit after MIME encoding.')
             folder = self.config.drafts_folder
             if not folder:
                 drafts = [f['name'] for f in self._folders(client) if '\\Drafts' in f['flags']]
@@ -297,11 +348,13 @@ class Mailbox:
                 if saved.get('X-ICloud-MCP-Content-SHA256') != msg['X-ICloud-MCP-Content-SHA256']:
                     raise MailError("request_id was already used for different content. Use a new request_id.")
             else:
-                status, _ = client.append(quoted(utf7_encode(folder)), '(\\Draft)', None, msg.as_bytes())
+                status, _ = client.append(quoted(utf7_encode(folder)), '(\\Draft)', None, raw)
                 if status != 'OK':
                     raise MailError("iCloud did not confirm saving the draft.")
                 existing = self._search(client, ['HEADER', 'Message-ID', quoted(str(msg['Message-ID']))])
             return {'saved': True, 'reused': reused, 'folder': folder, 'uidvalidity': validity,
                     'uid': existing[-1] if existing else None, 'message_id': str(msg['Message-ID']),
+                    'attachments': [{'filename': p.get_filename(), 'content_type': p.get_content_type(),
+                                     'size': len(p.get_payload(decode=True) or b'')} for p in msg.iter_attachments()],
                     'mailbox_url': 'https://www.icloud.com/mail/',
                     'link_note': 'Opens iCloud Mail; a stable direct draft URL is not provided by IMAP.'}
