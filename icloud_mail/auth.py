@@ -4,6 +4,7 @@ import hmac
 import html
 import json
 import os
+import re
 import secrets
 import sqlite3
 import time
@@ -22,6 +23,14 @@ SCOPES = ['mail:read', 'mail:drafts']
 
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def callback_origin(uri):
+    """Return a concrete HTTP origin safe to include in a CSP source list."""
+    parsed = urlsplit(str(uri))
+    if parsed.scheme not in ('https', 'http') or not re.fullmatch(r'[A-Za-z0-9.\-:\[\]]+', parsed.netloc):
+        raise ValueError('Invalid callback origin.')
+    return parsed.scheme + '://' + parsed.netloc
 
 
 class Store:
@@ -77,6 +86,10 @@ class OAuthProvider:
             raise RegistrationError('invalid_redirect_uri', 'One to ten redirect URIs required.')
         for uri in client_info.redirect_uris:
             u = urlsplit(str(uri))
+            try:
+                callback_origin(uri)
+            except ValueError:
+                raise RegistrationError('invalid_redirect_uri', 'A concrete HTTP callback origin is required.') from None
             if u.fragment or u.username or u.password or not u.hostname or not (
                 u.scheme == 'https' or (u.scheme == 'http' and u.hostname in ('localhost', '127.0.0.1', '::1'))
             ):
@@ -93,7 +106,10 @@ class OAuthProvider:
         return self.config.public_url + '/login?flow=' + flow
 
     async def login(self, request):
-        security = {'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
+        # Native form POSTs use Origin: null under no-referrer, defeating the
+        # origin check below. same-origin preserves it without leaking flow URLs
+        # to the external OAuth callback.
+        security = {'Cache-Control': 'no-store', 'Referrer-Policy': 'same-origin',
                     'Content-Security-Policy': "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
                     'X-Content-Type-Options': 'nosniff'}
         cookie_name = '__Host-icloud-login' if self.config.public_url.startswith('https:') else 'icloud-login'
@@ -102,6 +118,15 @@ class OAuthProvider:
             record = self.store.get('flow', flow)
             if not record:
                 return PlainTextResponse('Connection expired. Please reconnect.', 400, headers=security)
+            try:
+                target = callback_origin(record['params']['redirect_uri'])
+            except ValueError:
+                return PlainTextResponse('Invalid callback. Please reconnect.', 400, headers=security)
+            # Chromium applies form-action to the final 303 redirect as well.
+            # Allow only this flow's validated callback origin in addition to self.
+            security['Content-Security-Policy'] = (
+                f"default-src 'none'; form-action 'self' {target}; frame-ancestors 'none'; base-uri 'none'"
+            )
             csrf = secrets.token_urlsafe(32)
             self.store.put('csrf', csrf, {'flow': flow}, time.time()+600)
             client = await self.get_client(record['client_id'])

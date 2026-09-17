@@ -48,7 +48,11 @@ revocation, restart persistence, and MCP initialization.
 
 A Render deployment, public HTTPS/OAuth discovery, and a real iCloud IMAP login
 with folder listing have been verified. All five tools are registered on the live
-server. **The Docker build and account linking in ChatGPT have not yet been tested.**
+server. Browser login now preserves the same-origin form Origin header and allows
+the registered callback origin through the form CSP. Regression tests cover the
+login headers, cookie binding, rejected foreign origins, and OAuth redirects.
+**The Docker build remains untested; end-to-end account linking in ChatGPT is
+still awaiting confirmation.**
 The server is designed for a single owner and one process. It is not a public
 multi-account service.
 

@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from starlette.testclient import TestClient
 
-from icloud_mail.auth import OAuthProvider, digest
+from icloud_mail.auth import OAuthProvider, callback_origin, digest
 from icloud_mail.config import Config
 from icloud_mail.server import http_app
 
@@ -34,7 +34,7 @@ def register(client):
     return response.json()['client_id']
 
 
-def login(client, client_id, scope='mail:read mail:drafts'):
+def login_page(client, client_id, scope='mail:read mail:drafts'):
     verifier = 'v'*64
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
     response = client.get('/authorize', params=dict(client_id=client_id, redirect_uri='https://chatgpt.com/test-callback',
@@ -43,6 +43,11 @@ def login(client, client_id, scope='mail:read mail:drafts'):
     assert response.status_code == 302, response.text
     page = client.get(response.headers['location'])
     assert page.status_code == 200
+    return page, verifier
+
+
+def login(client, client_id, scope='mail:read mail:drafts'):
+    page, verifier = login_page(client, client_id, scope)
     flow = re.search(r'name="flow" value="([^"]+)"', page.text)[1]
     csrf = re.search(r'name="csrf" value="([^"]+)"', page.text)[1]
     response = client.post('/login', data={'flow':flow, 'csrf':csrf, 'key':KEY}, headers={'origin':'https://mail.example.org'}, follow_redirects=False)
@@ -51,6 +56,41 @@ def login(client, client_id, scope='mail:read mail:drafts'):
     assert query['state'] == ['original-state']
     return dict(grant_type='authorization_code', client_id=client_id, code=query['code'][0],
                 redirect_uri='https://chatgpt.com/test-callback', code_verifier=verifier, resource='https://mail.example.org/mcp')
+
+
+def test_browser_login_headers_and_csrf(client):
+    page, _ = login_page(client, register(client))
+    # no-referrer makes browsers send Origin: null on native form POSTs.
+    assert page.headers['referrer-policy'] == 'same-origin'
+    # Chromium also checks form-action against the post-login redirect.
+    assert "form-action 'self' https://chatgpt.com;" in page.headers['content-security-policy']
+    cookie = page.headers['set-cookie']
+    assert '__Host-icloud-login=' in cookie
+    assert 'Secure' in cookie and 'HttpOnly' in cookie and 'SameSite=strict' in cookie
+    form = {'flow': re.search(r'name="flow" value="([^"]+)"', page.text)[1],
+            'csrf': re.search(r'name="csrf" value="([^"]+)"', page.text)[1], 'key': KEY}
+    for origin in ['https://attacker.example', 'null']:
+        assert client.post('/login', data=form, headers={'origin': origin}).status_code == 403
+    assert client.post('/login', data=dict(form, csrf='wrong'),
+                       headers={'origin': 'https://mail.example.org'}).status_code == 403
+    response = client.post('/login', data=form, headers={'origin': 'https://mail.example.org'}, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers['location'].startswith('https://chatgpt.com/test-callback?')
+
+
+def test_login_requires_browser_cookie(client):
+    page, _ = login_page(client, register(client))
+    form = {'flow': re.search(r'name="flow" value="([^"]+)"', page.text)[1],
+            'csrf': re.search(r'name="csrf" value="([^"]+)"', page.text)[1], 'key': KEY}
+    client.cookies.clear()
+    assert client.post('/login', data=form, headers={'origin': 'https://mail.example.org'}).status_code == 403
+
+
+@pytest.mark.parametrize('uri', ['https://*.example.org/callback', 'https://example.org;evil/callback',
+                                'https://user@example.org/callback'])
+def test_callback_cannot_inject_csp_sources(uri):
+    with pytest.raises(ValueError):
+        callback_origin(uri)
 
 
 def rpc(client, token, method, params=None):
