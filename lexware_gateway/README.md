@@ -1,59 +1,77 @@
-# Lexware Office MCP auf Render
+# Lexware Office MCP on Render
 
-Eigener Render-Dienst im bestehenden Workspace von Jonas Böttcher.
-Quellcode und Bereitstellung liegen auf dem isolierten Branch `lexware-mcp` dieses
-Repositories. Der Mail-Dienst verwendet weiterhin `main`.
+Dedicated Render service in Jonas Böttcher's existing workspace. Source and
+deployment use the isolated `lexware-mcp` branch. The mail service remains on
+`main`.
 
-Basis: [marselsel/Lexware-MCP-Server](https://github.com/marselsel/Lexware-MCP-Server),
-Commit `8da792d08146665036943a9ee7d1b7f444225939`.
-Die OAuth-Anmeldung stammt aus dem iCloud-Mail-Projekt, verwendet aber eigene
-Schlüssel, Berechtigungen und Daten. Kein Zugriff auf das Mailkonto.
+Based on [marselsel/Lexware-MCP-Server](https://github.com/marselsel/Lexware-MCP-Server),
+pinned to `8da792d08146665036943a9ee7d1b7f444225939`. The single-owner OAuth
+provider is adapted from the iCloud project with separate keys, scopes and
+storage. It does not access the mail account.
 
-## Render-Einstellungen
+## Render settings
 
-- Region Frankfurt; Runtime Node; Branch `lexware-mcp`; automatische Deployments aus.
+- Frankfurt region; Node runtime; `lexware-mcp` branch; automatic deployments off.
 - Build: `bash lexware_gateway/build.sh`
 - Start: `.lexware-venv/bin/python -m lexware_gateway.server`
-- Health: `/healthz`; MCP: `/mcp`; OAuth mit dynamischer Clientregistrierung und PKCE.
+- Health: `/healthz`; MCP: `/mcp`; OAuth dynamic client registration and PKCE.
 - `NODE_VERSION=24.19.0`
-- `LEXWARE_LOGIN_KEY`: eigener zufälliger Verbindungsschlüssel, mindestens 32 Zeichen.
-- `LEXWARE_API_KEY`: im [Lexware-API-Bereich](https://app.lexware.de/addons/public-api)
-  erzeugen und ausschliesslich in Render als geheime Umgebungsvariable speichern.
+- `LEXWARE_LOGIN_KEY`: independent random connector key, at least 32 characters.
+- `LEXWARE_API_KEY`: generate in the [Lexware API settings](https://app.lexware.de/addons/public-api)
+  and store only as a secret Render environment variable.
 
-Nach Eintragen des API-Schlüssels die Render-Änderung mit Deployment speichern.
-Ohne den Schlüssel funktionieren Dienst, OAuth und Werkzeug-Erkennung; sämtliche
-Werkzeugaufrufe sind vor jedem Lexware-Zugriff gesperrt. Der Health-Status nennt
-`lexware_configured`, enthält aber keine Zugangsdaten.
+Deploy after configuring the API key. Without it, service health, OAuth and tool
+discovery work, but all tool invocations are blocked before accessing Lexware.
+Health reports `lexware_configured` without exposing credentials.
 
-## ChatGPT
+## ChatGPT connection
 
-MCP-URL des Dienstes mit `/mcp` verwenden; Authentifizierung OAuth wählen.
-Auf der Anmeldeseite den `LEXWARE_LOGIN_KEY` aus Render eingeben. Der Lexware-
-API-Schlüssel wird niemals in ChatGPT, GitHub oder das Plugin-Paket eingetragen.
+Use the service's `/mcp` URL and OAuth authentication. Enter `LEXWARE_LOGIN_KEY`
+on the connector's authorization page. Never put the Lexware API key into
+ChatGPT, GitHub or a plugin package.
 
-## Umfang und 2024
+## Scope and the 2024 workflow
 
-17 Werkzeuge: gezielte Beleg-/Dokument-/Dateiabfragen, Kontaktabfragen,
-Beleglisten, Zahlungsinformationen und Profildaten; Buchungsbelege anlegen oder
-ändern; Dateien hochladen und Belegen anhängen. Rechnungen und Rechnungskorrekturen
-erzeugen, Artikel verändern, Webhooks verändern und Löschwerkzeuge fehlen in der
-tatsächlich registrierten Werkzeugliste.
+The 17 registered tools provide targeted document, voucher, file, contact,
+payment and profile reads; bookkeeping voucher creation and updates; and file
+uploads and attachments. Sales-invoice creation, invoice correction creation,
+article writes, webhook writes and deletion tools are excluded from the actual
+registered list.
 
-Die [exportbasierte Checkliste 2024](https://github.com/tradmusica/organisation/blob/main/processes/lexware-checkliste-2024-exportbasiert.md)
-bleibt massgeblich. Keine fachliche Live-Prüfung. Korrekturen nur anhand der
-verifizierten Anweisung in `03_Korrekturen`, mit Versionsabgleich und Nachkontrolle.
-Zahlungszuordnungen, Stornos und festgeschriebene Belege erfordern weiterhin die
-Lexware-Oberfläche.
+The [export-based 2024 checklist](https://github.com/tradmusica/organisation/blob/main/processes/lexware-checkliste-2024-exportbasiert.md)
+remains authoritative. No live substantive bookkeeping audit. Corrections must
+follow a verified instruction in `03_Korrekturen`, with version and outcome
+checks. Bank allocations, cancellations and locked vouchers still require the
+Lexware web interface.
 
-## Betrieb
+## Operation and OAuth state
 
-Die erste Bereitstellung verwendet den kostenlosen Render-Plan. OAuth-Zustand
-liegt auf dem temporären Dateisystem; nach Neustart oder Deployment muss ChatGPT
-neu verbunden werden. Für dauerhafte Verbindungen einen persistenten Datenträger
-unter `/var/data` und `LEXWARE_STATE_DIR=/var/data/lexware-oauth` konfigurieren.
-Der optionale Blueprint `lexware_gateway/render.yaml` beschreibt diese Variante.
-Genau eine Instanz betreiben. Keine Zugangsdaten oder OAuth-Daten versionieren.
+The initial deployment uses Render's free plan. New registrations have encrypted
+self-contained client IDs under RFC 7591 A.5.2. Client metadata, including any
+client secret, stays encrypted inside the ID; the server validates it using a
+stable key derived from `LEXWARE_LOGIN_KEY` and the public endpoint. These IDs
+survive filesystem resets without a new paid service. IDs expire after one year;
+changing the connector key or endpoint invalidates them.
 
-Tests: unveränderte Upstream-Tests vor der Anpassung; danach TypeScript-Build und
-Gateway-Tests mit OAuth/PKCE, CSRF, Tokenrotation, Sperre ohne API-Schlüssel und
-Prüfung der echten MCP-Werkzeugliste. Keine Live-Buchung durch diese Tests.
+Legacy UUID client IDs are still accepted when their original SQLite records
+exist. A UUID whose record was lost cannot be reconstructed safely from the ID
+alone. ChatGPT reuses its registered client credentials, so clicking reconnect
+may reuse the lost ID. The OAuth client registration must be renewed or its
+original metadata restored from a backup.
+
+Authorization codes, access tokens, refresh tokens and pending login flows still
+use SQLite on the temporary filesystem. After a restart or deployment, authorize
+again with the surviving client registration. To retain all OAuth state across
+deployments, use a persistent disk at `/var/data` and
+`LEXWARE_STATE_DIR=/var/data/lexware-oauth`. The optional
+`lexware_gateway/render.yaml` describes that configuration. Run exactly one
+instance. Never version credentials or OAuth databases.
+
+## Verification
+
+Run the unchanged upstream tests before patching, then the TypeScript build and
+gateway tests. Gateway coverage includes empty-filesystem registration recovery
+for public and confidential clients, PKCE, callback binding, client-secret checks,
+tampering, expiry, key/endpoint isolation, CSRF, token rotation, missing-key
+blocking, and the actual MCP tool list. Tests do not create live bookkeeping
+entries.

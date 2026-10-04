@@ -22,12 +22,14 @@ def client(app):
     with TestClient(app, base_url='https://lexware.example.org') as client:
         yield client
 
-def connect(client, scope='lexware:read lexware:vouchers'):
-    reg = client.post('/register', json={'client_name':'ChatGPT test',
-        'redirect_uris':['https://chatgpt.com/test-callback'], 'token_endpoint_auth_method':'none',
-        'grant_types':['authorization_code','refresh_token'], 'response_types':['code'], 'scope':scope})
-    assert reg.status_code == 201, reg.text
-    client_id = reg.json()['client_id']
+def connect(client, scope='lexware:read lexware:vouchers', *, registration=None):
+    if registration is None:
+        reg = client.post('/register', json={'client_name':'ChatGPT test',
+            'redirect_uris':['https://chatgpt.com/test-callback'], 'token_endpoint_auth_method':'none',
+            'grant_types':['authorization_code','refresh_token'], 'response_types':['code'], 'scope':scope})
+        assert reg.status_code == 201, reg.text
+        registration = reg.json()
+    client_id = registration['client_id']
     verifier = 'v'*64
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
     auth = client.get('/authorize', params=dict(client_id=client_id, redirect_uri='https://chatgpt.com/test-callback',
@@ -46,6 +48,8 @@ def connect(client, scope='lexware:read lexware:vouchers'):
     assert query['state'] == ['bound-state']
     token_form = dict(grant_type='authorization_code', client_id=client_id, code=query['code'][0],
         redirect_uri='https://chatgpt.com/test-callback', code_verifier=verifier, resource='https://lexware.example.org/mcp')
+    if registration.get('client_secret'):
+        token_form['client_secret'] = registration['client_secret']
     assert client.post('/token',data=dict(token_form,code_verifier='w'*64)).status_code == 400
     token = client.post('/token',data=token_form)
     assert token.status_code == 200, token.text

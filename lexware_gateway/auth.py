@@ -1,4 +1,5 @@
 """Single-owner OAuth provider. Protocol validation/PKCE are provided by the MCP SDK."""
+import base64
 import hashlib
 import hmac
 import html
@@ -10,6 +11,7 @@ import sqlite3
 import time
 from urllib.parse import urlsplit
 
+from cryptography.fernet import Fernet, InvalidToken
 from mcp.server.auth.provider import (
     AccessToken, AuthorizationCode, AuthorizationParams, AuthorizeError,
     RefreshToken, RegistrationError, TokenError, construct_redirect_uri,
@@ -19,6 +21,9 @@ from mcp.server.auth.middleware.client_auth import AuthenticationError, ClientAu
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
 SCOPES = ['lexware:read', 'lexware:vouchers']
+CLIENT_ID_PREFIX = 'lexware_v1.'
+CLIENT_LIFETIME = 365 * 86400
+MAX_CLIENT_ID_LENGTH = 4096
 
 
 def digest(value):
@@ -73,9 +78,25 @@ class OAuthProvider:
         self.resource = config.public_url + '/mcp'
         if len(config.login_key_hash) != 64:
             raise RuntimeError('HTTP mode needs a login key. Set LEXWARE_LOGIN_KEY in Render.')
+        # RFC 7591 A.5.2 permits encrypted registration state in the client ID.
+        # Use a stable, domain-separated key so ephemeral Render restarts do not
+        # erase client registrations. A client ID must not reveal its secret.
+        key = hmac.digest(bytes.fromhex(config.login_key_hash),
+                          ('lexware-client-registration-v1:' + config.public_url).encode(), 'sha256')
+        self.client_cipher = Fernet(base64.urlsafe_b64encode(key))
         self.store = Store(config.state_dir / 'oauth.sqlite3')
 
     async def get_client(self, client_id):
+        if client_id.startswith(CLIENT_ID_PREFIX):
+            if len(client_id) > MAX_CLIENT_ID_LENGTH:
+                return None
+            try:
+                encoded = client_id[len(CLIENT_ID_PREFIX):].encode('ascii')
+                value = json.loads(self.client_cipher.decrypt(encoded, ttl=CLIENT_LIFETIME))
+                return OAuthClientInformationFull.model_validate(dict(value, client_id=client_id))
+            except (InvalidToken, ValueError, TypeError, UnicodeError):
+                return None
+        # Existing UUID registrations remain valid when their database survives.
         value = self.store.get('client', client_id)
         return OAuthClientInformationFull.model_validate(value) if value else None
 
@@ -94,7 +115,13 @@ class OAuthProvider:
                 u.scheme == 'https' or (u.scheme == 'http' and u.hostname in ('localhost', '127.0.0.1', '::1'))
             ):
                 raise RegistrationError('invalid_redirect_uri', 'HTTPS or loopback required.')
-        self.store.put('client', client_info.client_id, client_info.model_dump(mode='json'), time.time() + 365*86400)
+        value = client_info.model_dump(mode='json', exclude_none=True, exclude={'client_id'})
+        encoded = self.client_cipher.encrypt(json.dumps(value, separators=(',', ':')).encode()).decode('ascii')
+        client_id = CLIENT_ID_PREFIX + encoded
+        if len(client_id) > MAX_CLIENT_ID_LENGTH:
+            raise RegistrationError('invalid_client_metadata', 'Client registration metadata is too large.')
+        # The SDK returns this same object as its registration response.
+        client_info.client_id = client_id
 
     async def authorize(self, client, params):
         if params.resource != self.resource:
