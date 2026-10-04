@@ -16,7 +16,7 @@ def test_backend_tool_surface():
         LEXWARE_ENABLE_DRAFTS='true',LEXWARE_ENABLE_FINALIZE='false',LEXWARE_ENABLE_URL_UPLOAD='false')
     env.pop('OAUTH_ISSUER',None)
     env.pop('LEXWARE_READ_ONLY',None)
-    p=subprocess.Popen(['node','dist/server.js'],cwd=root,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    p=subprocess.Popen(['node','--require',str((Path(__file__).parents[1]/'loopback.cjs').resolve()),'dist/server.js'],cwd=root,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     try:
         with httpx.Client(base_url='http://127.0.0.1:8082',trust_env=False) as c:
             for _ in range(100):

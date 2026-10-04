@@ -53,14 +53,14 @@ def http_app(config, *, upstream='http://127.0.0.1:8081', internal_token='', con
                 env = dict(os.environ, PORT='8081', __PORT='8081', MCP_AUTH_TOKEN=internal_token,
                            LEXWARE_READ_ONLY='false', LEXWARE_ENABLE_DRAFTS='true',
                            LEXWARE_ENABLE_FINALIZE='false', LEXWARE_ENABLE_URL_UPLOAD='false',
-                           SERVER_URL=config.public_url)
+                           SERVER_URL=config.public_url, SKYBRIDGE_TELEMETRY_DISABLED='1')
                 # Discovery works before credentials are entered. The gateway blocks
                 # every tools/call, and the backend has no route to Lexware meanwhile.
                 if not configured:
                     env['LEXWARE_API_KEY'] = 'configuration-pending'
                     env['LEXWARE_API_BASE_URL'] = 'http://127.0.0.1:9'
                 env.pop('OAUTH_ISSUER', None)
-                process = subprocess.Popen(['node', 'dist/server.js'], cwd='.lexware-runtime', env=env)
+                process = subprocess.Popen(['node', '--require', str(Path(__file__).with_name('loopback.cjs').resolve()), 'dist/server.js'], cwd='.lexware-runtime', env=env)
                 for _ in range(100):
                     if process.poll() is not None:
                         raise RuntimeError('Lexware backend failed to start')
