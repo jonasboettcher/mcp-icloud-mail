@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "lexware-office": {
+      "type": "streamable-http",
+      "url": "https://mcp-lexware-office.onrender.com/mcp"
+    }
+  }
+}
