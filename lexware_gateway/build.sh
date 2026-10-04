@@ -3,9 +3,11 @@ set -euo pipefail
 python3 -m venv .lexware-venv
 .lexware-venv/bin/pip install -r requirements.lock
 if [ ! -d .lexware-runtime/.git ]; then
-  git clone https://github.com/marselsel/Lexware-MCP-Server.git .lexware-runtime
+  # Render restores dependency caches without nested Git metadata.
+  git init .lexware-runtime
+  git -C .lexware-runtime remote add origin https://github.com/marselsel/Lexware-MCP-Server.git
 fi
-git -C .lexware-runtime fetch origin 8da792d08146665036943a9ee7d1b7f444225939
+git -C .lexware-runtime fetch --depth 1 origin 8da792d08146665036943a9ee7d1b7f444225939
 git -C .lexware-runtime reset --hard 8da792d08146665036943a9ee7d1b7f444225939
 (cd .lexware-runtime && npm ci && npm test)
 .lexware-venv/bin/python -m lexware_gateway.patch_backend .lexware-runtime
