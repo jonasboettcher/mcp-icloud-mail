@@ -5,6 +5,7 @@ import json
 import re
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import pytest
 from starlette.testclient import TestClient
 from lexware_gateway.server import Config, http_app
@@ -85,13 +86,33 @@ def test_scope_and_body_limits(app, client):
         assert c.post('/mcp',content=b'x'*(16*1024*1024+1)).status_code == 413
         assert c.get('/healthz',headers={'host':'evil.example'}).status_code == 400
 
-def test_real_gateway_backend_discovery(tmp_path):
+@pytest.mark.parametrize('modern', [False, True])
+def test_real_gateway_backend_discovery(tmp_path, modern):
     app=http_app(Config('https://lexware.example.org',digest(KEY),tmp_path),
         internal_token='test-only-internal-'+'x'*40,configured=False,manage_backend=True)
     with TestClient(app,base_url='https://lexware.example.org') as c:
         _, token=connect(c)
         headers={'Authorization':'Bearer '+token['access_token'],'Accept':'application/json, text/event-stream'}
-        response=c.post('/mcp',headers=headers,json={'jsonrpc':'2.0','id':1,'method':'tools/list'})
+        params={}
+        if modern:
+            headers.update({'MCP-Protocol-Version':'2026-07-28','Mcp-Method':'server/discover'})
+            params={'_meta':{'io.modelcontextprotocol/protocolVersion':'2026-07-28',
+                            'io.modelcontextprotocol/clientInfo':{'name':'ChatGPT test','version':'1'},
+                            'io.modelcontextprotocol/clientCapabilities':{}}}
+            discovery={'jsonrpc':'2.0','id':1,'method':'server/discover','params':params}
+            response=c.post('/mcp',headers=headers,json=discovery)
+            assert response.status_code==200,response.text
+            # Preserve backend validation rather than manufacturing missing metadata.
+            incomplete={key:value for key,value in headers.items() if key!='Mcp-Method'}
+            rejected=c.post('/mcp',headers=incomplete,json=discovery)
+            assert rejected.status_code==400,rejected.text
+            assert rejected.json()['error']['code']==-32020
+            mismatching=dict(headers, **{'Mcp-Method':'tools/list'})
+            rejected=c.post('/mcp',headers=mismatching,json=discovery)
+            assert rejected.status_code==400,rejected.text
+            assert rejected.json()['error']['code']==-32020
+            headers['Mcp-Method']='tools/list'
+        response=c.post('/mcp',headers=headers,json={'jsonrpc':'2.0','id':2,'method':'tools/list','params':params})
         assert response.status_code==200,response.text
         if response.headers.get('content-type','').startswith('text/event-stream'):
             data=json.loads(next(line[6:] for line in response.text.splitlines() if line.startswith('data: ')))
@@ -99,3 +120,44 @@ def test_real_gateway_backend_discovery(tmp_path):
         names={x['name'] for x in data['result']['tools']}
         assert 'update-voucher' in names
         assert 'create-draft-invoice' not in names
+
+def test_proxy_preserves_named_call_metadata_and_internal_auth(tmp_path, monkeypatch):
+    received=[]
+    encoded='=?base64?SGVsbG8sIOS4lueVjA==?='
+    internal_token='test-only-internal-'+'x'*40
+    def backend(request):
+        received.append(request)
+        payload=json.loads(request.content)
+        assert request.headers['mcp-method']==payload['method']=='tools/call'
+        assert request.headers['mcp-name']==payload['params']['name']=='get-profile'
+        assert request.headers['mcp-param-label']==encoded
+        assert request.headers['mcp-protocol-version']=='2026-07-28'
+        assert request.headers['authorization']=='Bearer '+internal_token
+        assert 'cookie' not in request.headers
+        assert 'x-client-secret' not in request.headers
+        return httpx.Response(200,json={'jsonrpc':'2.0','id':payload['id'],'result':{}},
+                              headers={'X-Accel-Buffering':'no'})
+    original_client=httpx.AsyncClient
+    monkeypatch.setattr(httpx,'AsyncClient',lambda **kwargs:original_client(
+        transport=httpx.MockTransport(backend),**kwargs))
+    app=http_app(Config('https://lexware.example.org',digest(KEY),tmp_path),
+                 configured=True,internal_token=internal_token)
+    with TestClient(app,base_url='https://lexware.example.org') as c:
+        _, token=connect(c,scope='lexware:read')
+        headers={'Authorization':'Bearer '+token['access_token'],
+                 'Accept':'application/json, text/event-stream','MCP-Protocol-Version':'2026-07-28',
+                 'mCp-MeThOd':'tools/call','mCp-NaMe':'get-profile','mCp-PaRaM-LaBeL':encoded,
+                 'Cookie':'external=private','X-Client-Secret':'must-not-be-forwarded'}
+        response=c.post('/mcp',headers=headers,json={
+            'jsonrpc':'2.0','id':1,'method':'tools/call',
+            'params':{'name':'get-profile','arguments':{'label':'Hello, 世界'}}})
+        assert response.status_code==200,response.text
+        assert response.headers['x-accel-buffering']=='no'
+        assert len(received)==1
+        # Modern metadata does not change write permissions.
+        headers['mCp-NaMe']='update-voucher'
+        denied=c.post('/mcp',headers=headers,json={
+            'jsonrpc':'2.0','id':2,'method':'tools/call',
+            'params':{'name':'update-voucher','arguments':{}}})
+        assert denied.status_code==403
+        assert len(received)==1

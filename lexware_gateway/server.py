@@ -104,8 +104,11 @@ def http_app(config, *, upstream='http://127.0.0.1:8081', internal_token='', con
                 name = (rpc.get('params') or {}).get('name')
                 if name in WRITE_TOOLS and 'lexware:vouchers' not in request.auth.scopes:
                     return JSONResponse({'error':'Missing lexware:vouchers permission'}, 403)
+        # Preserve modern MCP metadata exactly; the backend validates it against
+        # the body. Never generate missing headers or forward external credentials.
         headers = {key:value for key,value in request.headers.items()
-                   if key.lower() in {'accept','content-type','mcp-protocol-version','mcp-session-id','last-event-id'}}
+                   if key.lower() in {'accept','content-type','mcp-protocol-version','mcp-session-id','last-event-id',
+                                      'mcp-method','mcp-name'} or key.lower().startswith('mcp-param-')}
         headers['Authorization'] = 'Bearer ' + internal_token
         try:
             req = request.app.state.client.build_request(request.method, upstream+'/mcp', content=body, headers=headers)
@@ -113,7 +116,7 @@ def http_app(config, *, upstream='http://127.0.0.1:8081', internal_token='', con
         except httpx.HTTPError:
             return JSONResponse({'error':'Lexware backend unavailable'}, 503)
         passed_headers = {key:value for key,value in response.headers.items()
-                          if key.lower() in {'content-type','mcp-session-id','cache-control'}}
+                          if key.lower() in {'content-type','mcp-session-id','cache-control','x-accel-buffering'}}
         return StreamingResponse(response.aiter_bytes(), status_code=response.status_code,
                                  headers=passed_headers, background=BackgroundTask(response.aclose))
 
