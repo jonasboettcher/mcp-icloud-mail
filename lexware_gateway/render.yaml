@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: mcp-lexware-office
+    runtime: node
+    repo: https://github.com/jonasboettcher/mcp-icloud-mail
+    branch: lexware-mcp
+    region: frankfurt
+    plan: 0.5c-512mb
+    numInstances: 1
+    autoDeployTrigger: off
+    buildCommand: bash lexware_gateway/build.sh
+    startCommand: .lexware-venv/bin/python -m lexware_gateway.server
+    healthCheckPath: /healthz
+    disk:
+      name: lexware-oauth-state
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 24.19.0
+      - key: LEXWARE_STATE_DIR
+        value: /var/data/lexware-oauth
+      - key: LEXWARE_LOGIN_KEY
+        generateValue: true
+      - key: LEXWARE_API_KEY
+        sync: false
