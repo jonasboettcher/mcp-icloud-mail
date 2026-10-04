@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "lexware-office",
+  "version": "0.1.0",
+  "description": "Lexware Office exports and documented bookkeeping voucher corrections for Verlag der Spielleute. OAuth connection to the separate Render service.",
+  "author": {
+    "name": "Jonas Böttcher"
+  },
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Lexware Office",
+        "shortDescription": "Belege und Korrekturen",
+        "longDescription": "Gezielte Exporte und dokumentierte Belegkorrekturen. Ausgangsrechnungen und Rechnungskorrekturen können nicht erstellt werden. Die Verbindung verwendet OAuth und den separaten Render-Dienst.",
+        "developerName": "Jonas Böttcher",
+        "category": "Productivity",
+        "defaultPrompt": "Führe die dokumentierten Belegkorrekturen gemäss dem exportbasierten Ablauf 2024 aus."
+      }
+    }
+  }
+}
