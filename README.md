@@ -35,9 +35,11 @@ The setup instructions below describe the existing single-account prototype.
 | `read_attachment` | Read attachments in bounded Base64 chunks |
 | `create_draft` | Save a new text draft with file attachments directly in iCloud, preserving threading for replies |
 | `update_draft` | Edit one identified draft or add files, then move the previous version to Trash after verifying the replacement |
+| `delete_draft` | Move one explicitly selected and verified draft to Trash, with safe retries |
 
 Reading does not change unread status. `create_draft` preserves existing drafts;
-`update_draft` replaces only the explicitly identified draft. Sending, permanent
+`update_draft` replaces only the explicitly identified draft. `delete_draft` moves
+only the explicitly identified draft to Trash. Sending, permanent
 deletion, and automatic forwarding are not implemented.
 
 ### Draft attachments
@@ -110,12 +112,47 @@ that was externally edited, deleted, or sent is not used to remove an old draft.
 Signed and encrypted MIME drafts are rejected. Concurrent external changes cause
 verification to stop; there is no cross-client transaction or automatic merge.
 
+### Deleting an existing draft
+
+Read the selected draft first. Call `delete_draft` with its exact `folder`,
+`uidvalidity`, `uid`, `expected_message_id` (the returned `message-id`) and
+`expected_content_sha256` (the returned `content_sha256`). The content hash covers
+the complete raw message, even when only a page of its body was returned.
+Only the configured Drafts folder is accepted. A changed identity or content
+stops deletion; select and review the draft again rather than guessing a UID.
+
+The server checks for IMAP MOVE or UIDPLUS and an unambiguous special-use Trash
+folder. MOVE targets one UID. The UIDPLUS fallback verifies the complete Trash
+copy before marking and expunging that one source UID. Neither path permanently
+deletes the Trash copy or removes unrelated messages, including other messages
+already marked deleted. `list_folders` reports `draft_deletions_supported` and
+`draft_deletion_method`.
+
+`deleted: true` means the source is absent from Drafts and its matching content
+was verified in Trash. The result includes the Trash identity for recovery.
+`cleanup_pending: true` means the outcome is unconfirmed. After a timeout or this
+result, retry with the **same original arguments**, including the old UID and
+content hash. A retry verifies the existing Trash copy and resumes incomplete
+UIDPLUS cleanup without creating another matching copy. A missing source without
+a verified Trash copy is not reported as successful deletion. Trash retention
+follows the mailbox settings.
+
+Deletion uses the existing `mail:drafts` permission; it does not add a mail-wide
+deletion scope. Existing connections need their tool metadata refreshed to expose
+`delete_draft` and the updated `read_message` result.
+
 ## Validation status
 
 Implemented and tested locally with simulated IMAP and real MCP/OAuth handlers.
 Tests cover MIME, Unicode characters, HTML, attachments, UIDVALIDITY, read status,
 search filters, draft retries, threading, OAuth/PKCE, access controls, token rotation,
 revocation, restart persistence, and MCP initialization.
+
+Draft deletion is covered by 33 simulated-IMAP cases for MOVE and UIDPLUS,
+including identity/content changes, lost responses, recoverable Trash verification
+and preservation of unrelated deleted messages. An authenticated MCP integration
+test covers the deletion tool and its existing `mail:drafts` scope. The complete
+suite passes 99 tests; live mailbox deletion has not yet been verified.
 
 A Render deployment, public HTTPS/OAuth discovery, and a real iCloud IMAP login
 with folder listing have been verified. Draft updates are tested with simulated
@@ -260,7 +297,7 @@ Following the [OpenAI guide](https://developers.openai.com/plugins/deploy/connec
    secret manually in the connection settings.
 4. Review the client, redirect URL, and permissions on the login page. Enter your
    connector key there.
-5. Check the six discovered tools and enable the connection in a new chat.
+5. Check the seven discovered tools and enable the connection in a new chat.
 
 Your Apple password is not passed to ChatGPT during this process. Connection setup
 depends on the features available to your account.
@@ -315,7 +352,7 @@ system user's permissions apply; OAuth is used for HTTP access.
 
 HTTP access is protected by OAuth Authorization Code with S256-PKCE. The server
 provides discovery, registration, login, token refresh, and revocation. The scopes
-are `mail:read` and `mail:drafts`; both draft operations check their scope in addition
+are `mail:read` and `mail:drafts`; all draft operations check their scope in addition
 to general authentication.
 
 Access tokens expire after one hour; rotating refresh tokens expire after 30 days.
