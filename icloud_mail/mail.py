@@ -240,7 +240,8 @@ class Mailbox:
             capabilities = b' '.join(rows or []).decode('ascii').upper().split() if status == 'OK' else []
             method = 'MOVE' if 'MOVE' in capabilities else 'UIDPLUS' if 'UIDPLUS' in capabilities else None
             return {'folders': self._folders(client), 'draft_updates_supported': method is not None,
-                    'draft_update_method': method}
+                    'draft_update_method': method, 'draft_deletions_supported': method is not None,
+                    'draft_deletion_method': method}
 
     def _drafts_folder(self, client):
         if self.config.drafts_folder:
@@ -389,12 +390,110 @@ class Mailbox:
             raise MailError("Invalid body range.")
         with self.connection() as client:
             self._select(client, folder, uidvalidity)
-            result = parse_message(self._fetch(client, uid))
+            raw = self._fetch(client, uid)
+            result = parse_message(raw)
         body = result['body']
         result.update(folder=folder, uidvalidity=uidvalidity, uid=uid, body=body[offset:offset+max_chars],
                       body_total_chars=len(body), next_offset=offset+max_chars if offset+max_chars < len(body) else None,
+                      content_sha256=hashlib.sha256(raw).hexdigest(),
                       mailbox_url='https://www.icloud.com/mail/')
         return result
+
+    def delete_draft(self, folder, uidvalidity, uid, expected_message_id, expected_content_sha256):
+        """Move one verified draft to Trash; never use a mailbox-wide expunge."""
+        if uid < 1 or uidvalidity < 1:
+            raise MailError('UID and UIDVALIDITY must be positive.')
+        if not expected_message_id or len(expected_message_id) > 998:
+            raise MailError('Supply the exact Message-ID returned by read_message.')
+        quoted(expected_message_id)
+        if not re.fullmatch(r'[0-9a-f]{64}', expected_content_sha256):
+            raise MailError('Supply content_sha256 from read_message as expected_content_sha256.')
+        with self.write_lock, self.connection() as client:
+            if folder != self._drafts_folder(client):
+                raise MailError('Only the configured Drafts folder can be deleted from.')
+            self._select(client, folder, uidvalidity, readonly=False)
+            status, values = client.capability()
+            capabilities = set(b' '.join(values or []).upper().split())
+            if status != 'OK' or not capabilities.intersection({b'MOVE', b'UIDPLUS'}):
+                raise MailError('Safe draft deletion requires IMAP MOVE or UIDPLUS; no draft was changed.')
+            trash = [f['name'] for f in self._folders(client) if '\\Trash' in f['flags']]
+            if len(trash) != 1 or trash[0] == folder:
+                raise MailError('Trash folder is ambiguous; no draft was changed.')
+
+            def matches(raw):
+                message = BytesParser(policy=email.policy.default).parsebytes(raw)
+                return (message.get_all('Message-ID') == [expected_message_id] and
+                        hashlib.sha256(raw).hexdigest() == expected_content_sha256)
+
+            def source_flags():
+                self._select(client, folder, uidvalidity, readonly=False)
+                flags = self._flags(client, uid)
+                if flags is not None:
+                    if '\\draft' not in flags:
+                        raise MailError('Target is not a draft. No message was removed.')
+                    if not matches(self._fetch(client, uid)):
+                        raise MailError('Draft identity or content changed. Read it again before deleting.')
+                return flags
+
+            def verified_trash_copy():
+                validity = self._select(client, trash[0])
+                candidates = self._search(client, ['HEADER', 'Message-ID', quoted(expected_message_id)])
+                if len(candidates) > 20:
+                    raise MailError('Too many matching Trash entries to verify safely.')
+                for candidate in candidates:
+                    flags = self._flags(client, candidate)
+                    if flags is not None and '\\deleted' not in flags and matches(self._fetch(client, candidate)):
+                        return {'folder': trash[0], 'uidvalidity': validity, 'uid': candidate,
+                                'message_id': expected_message_id, 'content_sha256': expected_content_sha256}
+                return None
+
+            flags = source_flags()
+            archived = verified_trash_copy()
+            result = {'deleted': False, 'removed_from_drafts': False, 'cleanup_pending': False,
+                      'reused': flags is None or archived is not None, 'folder': folder,
+                      'uidvalidity': uidvalidity, 'uid': uid, 'message_id': expected_message_id,
+                      'permanently_deleted': False, 'mailbox_url': 'https://www.icloud.com/mail/'}
+            if flags is None:
+                if archived is None:
+                    raise MailError('Draft is missing and no matching recoverable Trash copy was found.')
+                result.update(deleted=True, removed_from_drafts=True, trash=archived)
+                return result
+            if '\\deleted' in flags and (b'UIDPLUS' not in capabilities or archived is None):
+                raise MailError('Draft is marked deleted without a safe verified cleanup path.')
+            try:
+                flags = source_flags()
+                if flags is not None:
+                    if b'MOVE' in capabilities and '\\deleted' not in flags:
+                        status, _ = client.uid('MOVE', str(uid), quoted(utf7_encode(trash[0])))
+                        if status != 'OK':
+                            raise MailError('Draft move was not confirmed.')
+                    else:
+                        if archived is None:
+                            status, _ = client.uid('COPY', str(uid), quoted(utf7_encode(trash[0])))
+                            if status != 'OK':
+                                raise MailError('Trash copy was not confirmed.')
+                            archived = verified_trash_copy()
+                            if archived is None:
+                                raise MailError('Trash copy failed content verification.')
+                        flags = source_flags()
+                        if flags is not None:
+                            status, _ = client.uid('STORE', str(uid), '+FLAGS.SILENT', '(\\Deleted)')
+                            if status != 'OK':
+                                raise MailError('Draft removal flag was not confirmed.')
+                            status, _ = client.uid('EXPUNGE', str(uid))
+                            if status != 'OK':
+                                raise MailError('UID-scoped draft removal was not confirmed.')
+                if source_flags() is not None:
+                    raise MailError('The target draft is still present.')
+                archived = verified_trash_copy()
+                if archived is None:
+                    raise MailError('Recoverable Trash copy was not confirmed.')
+            except (MailError, imaplib.IMAP4.error, OSError):
+                result.update(cleanup_pending=True, warning='Moving this draft to Trash was not confirmed. '
+                    'Retry with the same original folder, UIDVALIDITY, UID, Message-ID and content hash.')
+                return result
+            result.update(deleted=True, removed_from_drafts=True, trash=archived)
+            return result
 
     def attachment(self, folder, uidvalidity, uid, part_index, offset=0, length=65536):
         if offset < 0 or not 1 <= length <= 262144:

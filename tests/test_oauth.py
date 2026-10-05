@@ -128,8 +128,10 @@ def test_oauth_pkce_replay_refresh_and_revoke(client, config):
     assert init.status_code == 200, init.text
     assert init.json()['result']['serverInfo']['name'] == 'iCloud Mail'
     listed = rpc(client, token['access_token'], 'tools/list').json()['result']['tools']
-    assert {t['name'] for t in listed} == {'list_folders','search_messages','read_message','read_attachment','create_draft','update_draft'}
+    assert {t['name'] for t in listed} == {'list_folders','search_messages','read_message','read_attachment','create_draft','update_draft','delete_draft'}
     assert next(t for t in listed if t['name'] == 'update_draft')['annotations']['destructiveHint']
+    deletion = next(t for t in listed if t['name'] == 'delete_draft')
+    assert deletion['annotations']['destructiveHint'] and deletion['annotations']['idempotentHint']
     assert not next(t for t in listed if t['name']=='create_draft')['annotations']['readOnlyHint']
     # Tokens persist across restarts, while their plaintext never appears in storage.
     other = OAuthProvider(config)
@@ -166,6 +168,32 @@ def test_scope_enforcement_no_imap_needed(client, monkeypatch):
         'folder':'Drafts', 'uidvalidity':42, 'uid':8, 'expected_message_id':'<test@example.org>',
         'request_id':'update_request_001', 'body':'new'}}).json()['result']
     assert update['isError'] and 'mail:drafts' in update['content'][0]['text']
+    deletion = rpc(client, token, 'tools/call', {'name':'delete_draft', 'arguments':{
+        'folder':'Drafts', 'uidvalidity':42, 'uid':8, 'expected_message_id':'<test@example.org>',
+        'expected_content_sha256':'a'*64}}).json()['result']
+    assert deletion['isError'] and 'mail:drafts' in deletion['content'][0]['text']
+
+
+def test_delete_draft_through_authenticated_mcp(client, monkeypatch):
+    import contextlib
+    from icloud_mail.mail import Mailbox
+    from test_delete_draft import DeleteIMAP
+    from email.parser import BytesParser
+    from email.policy import SMTP
+    imap = DeleteIMAP()
+    @contextlib.contextmanager
+    def connection(self):
+        yield imap
+    monkeypatch.setattr(Mailbox, 'connection', connection)
+    token = client.post('/token', data=login(client, register(client))).json()['access_token']
+    arguments = {'folder':'Drafts', 'uidvalidity':42, 'uid':8,
+                 'expected_message_id':BytesParser(policy=SMTP).parsebytes(imap.original)['Message-ID'],
+                 'expected_content_sha256':hashlib.sha256(imap.original).hexdigest()}
+    response = rpc(client, token, 'tools/call', {'name':'delete_draft', 'arguments':arguments}).json()['result']
+    assert not response.get('isError'), response
+    payload = response.get('structuredContent') or json.loads(response['content'][0]['text'])
+    assert payload['deleted'] and not payload['permanently_deleted']
+    assert set(imap.drafts) == {20} and imap.trash == {101: imap.original}
 
 
 def test_update_draft_through_authenticated_mcp(client, monkeypatch):
