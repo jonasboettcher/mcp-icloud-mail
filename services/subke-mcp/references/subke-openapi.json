@@ -1,0 +1,571 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Subke Customer API",
+    "version": "1.0.0",
+    "description": "Programmatic access for Subke fulfillment customers."
+  },
+  "servers": [
+    {
+      "url": "https://tbfdscpntpwprefyrdjj.supabase.co/functions/v1/public-api"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "sk_live_…"
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "x-scopes": [
+    "orders:read",
+    "orders:write",
+    "stock:read",
+    "products:read",
+    "returns:read",
+    "returns:write",
+    "inbound:read",
+    "inbound:write"
+  ],
+  "paths": {
+    "/v1/ping": {
+      "get": {
+        "summary": "Health check",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/orders": {
+      "get": {
+        "summary": "List orders",
+        "security": [
+          {
+            "bearerAuth": [
+              "orders:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from_date",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to_date",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "paginated orders"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create order",
+        "security": [
+          {
+            "bearerAuth": [
+              "orders:write"
+            ]
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "created"
+          }
+        }
+      }
+    },
+    "/v1/orders/{id}": {
+      "get": {
+        "summary": "Get order",
+        "security": [
+          {
+            "bearerAuth": [
+              "orders:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "order"
+          }
+        }
+      }
+    },
+    "/v1/orders/{id}/shipments": {
+      "get": {
+        "summary": "List shipments (parcels) for an order — incl. per-parcel items with batch/MHD/IN-REF and serial_numbers",
+        "security": [
+          {
+            "bearerAuth": [
+              "orders:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "shipments"
+          }
+        }
+      }
+    },
+    "/v1/orders/{id}/serial-numbers": {
+      "get": {
+        "summary": "List serial numbers shipped for an order",
+        "security": [
+          {
+            "bearerAuth": [
+              "orders:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "serial numbers"
+          }
+        }
+      }
+    },
+    "/v1/serial-numbers": {
+      "get": {
+        "summary": "Search serial numbers across all orders / inbounds",
+        "security": [
+          {
+            "bearerAuth": [
+              "orders:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "serial_number",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "product_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "serial numbers"
+          }
+        }
+      }
+    },
+    "/v1/stock": {
+      "get": {
+        "summary": "List stock",
+        "security": [
+          {
+            "bearerAuth": [
+              "stock:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "sku",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "warehouse_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "stock rows"
+          }
+        }
+      }
+    },
+    "/v1/products": {
+      "get": {
+        "summary": "List products",
+        "security": [
+          {
+            "bearerAuth": [
+              "products:read"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "products"
+          }
+        }
+      }
+    },
+    "/v1/products/{id}": {
+      "get": {
+        "summary": "Get product with packaging levels",
+        "security": [
+          {
+            "bearerAuth": [
+              "products:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "product"
+          }
+        }
+      }
+    },
+    "/v1/warehouses": {
+      "get": {
+        "summary": "List warehouses",
+        "security": [
+          {
+            "bearerAuth": [
+              "stock:read"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "warehouses"
+          }
+        }
+      }
+    },
+    "/v1/returns": {
+      "get": {
+        "summary": "List returns",
+        "security": [
+          {
+            "bearerAuth": [
+              "returns:read"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "returns"
+          }
+        }
+      },
+      "post": {
+        "summary": "Announce return",
+        "security": [
+          {
+            "bearerAuth": [
+              "returns:write"
+            ]
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "created"
+          }
+        }
+      }
+    },
+    "/v1/returns/{id}": {
+      "get": {
+        "summary": "Get return",
+        "security": [
+          {
+            "bearerAuth": [
+              "returns:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "return"
+          }
+        }
+      }
+    },
+    "/v1/inbound": {
+      "get": {
+        "summary": "List inbound shipments",
+        "security": [
+          {
+            "bearerAuth": [
+              "inbound:read"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "inbound"
+          }
+        }
+      },
+      "post": {
+        "summary": "Announce inbound",
+        "security": [
+          {
+            "bearerAuth": [
+              "inbound:write"
+            ]
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "created"
+          }
+        }
+      }
+    },
+    "/v1/inbound/{id}": {
+      "get": {
+        "summary": "Get inbound + items + goods receipts + serial_numbers",
+        "security": [
+          {
+            "bearerAuth": [
+              "inbound:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "inbound"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Mutate inbound (Shopify bridge): add_items / remove_items / update_quantities / cancel",
+        "security": [
+          {
+            "bearerAuth": [
+              "inbound:write"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "updated"
+          }
+        }
+      }
+    },
+    "/v1/inbound/{id}/arrivals": {
+      "get": {
+        "summary": "Per-arrival goods receipts (incl. batch/MHD/IN-REF), pallet/box units and serial numbers",
+        "security": [
+          {
+            "bearerAuth": [
+              "inbound:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "arrivals"
+          }
+        }
+      }
+    },
+    "/v1/shipments/{tracking}": {
+      "get": {
+        "summary": "Lookup by tracking number",
+        "security": [
+          {
+            "bearerAuth": [
+              "orders:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "tracking",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "shipment"
+          }
+        }
+      }
+    },
+    "/v1/sub-customers": {
+      "get": {
+        "summary": "List sub-customers of the authenticated parent (filter via ?q=, ?page, ?per_page). Order/shipment payloads also include a nested sub_customer object when applicable.",
+        "security": [
+          {
+            "bearerAuth": [
+              "orders:read"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "sub customers"
+          }
+        }
+      }
+    }
+  }
+}
