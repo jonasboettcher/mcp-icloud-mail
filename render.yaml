@@ -5,7 +5,9 @@ services:
     runtime: python
     region: frankfurt
     plan: 0.5c-512mb
+    repo: https://github.com/tradmusica/mcps
     branch: main
+    rootDir: servers/icloud-mail
     numInstances: 1
     autoDeployTrigger: commit
     buildCommand: bash scripts/render-build.sh
