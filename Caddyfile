@@ -1,3 +1,0 @@
-{$ICLOUD_DOMAIN} {
-    reverse_proxy connector:8000
-}
